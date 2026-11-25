@@ -133,9 +133,9 @@ say exactly what each bound holds.
 
 Linux, macOS and Windows, on amd64 and arm64, are built and vetted on every change. The tests run
 on macOS (arm64), Linux (amd64) and Windows (amd64); arm64 on Linux and Windows is built and
-vetted, not tested. For v0.16.0, the full release checks ran on macOS at the tagged commit, and on
-Linux and Windows on this release's code, before its last test and documentation changes. Vet and
-the tests, with the race detector, run on Linux, macOS and Windows at the tagged commit in CI.
+vetted, not tested. For v0.17.0, the full release checks ran on macOS at the tagged commit, and
+vet and the tests, with the race detector, ran on Linux, macOS and Windows at the tagged commit in
+CI. No full release checks ran on Linux or Windows for this release.
 
 Where a system can't hold what you ask, go-proc refuses with an error, before anything starts, and
 never quietly gives you less. What each system refuses, by name:
