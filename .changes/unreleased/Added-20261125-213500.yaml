@@ -1,0 +1,3 @@
+kind: Added
+body: 'proc: `HomeEnvCache(root, cache)` is `HomeEnv(root)` with `XDG_CACHE_HOME` pointed at `cache` itself, so a child keeps its cache in a folder the caller keeps between runs while the rest of its home is fresh. No other variable changes. On Linux and the BSDs `os.UserCacheDir` follows it; on macOS and Windows the system cache folder stays beneath `root`. It refuses, with `ErrHomeCache`, an empty or relative `root` or `cache`, a `cache` that is `root` or beneath it, and one that holds `root`. The caller judges the cache folder itself, and sets a tool''s own cache variables, such as `GOCACHE`.'
+time: 2026-11-25T21:35:00.000000+00:00

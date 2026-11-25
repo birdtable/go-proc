@@ -1158,3 +1158,63 @@ func SystemEnv() []string {
 // an absolute root, as a relative one gives relative values that the child reads against its own Dir.
 // testkit.Isolate sets the same list, which a proc test holds equal to this one.
 func HomeEnv(root string) []string { return homevars.Under(root) }
+
+// ErrHomeCache is wrapped by each refusal of HomeEnvCache, so a caller tells a folder it gave wrong
+// from any other error without matching text. Each refusal names the folder it refuses.
+var ErrHomeCache = errors.New("proc: HomeEnvCache refuses the folders it is given")
+
+var (
+	errHomeCacheRoot   = fmt.Errorf("%w: root is empty or relative, and the cache folder is judged apart from root only against an absolute one", ErrHomeCache)
+	errHomeCacheCache  = fmt.Errorf("%w: cache is empty or relative, and a child reads a relative folder against its own Dir", ErrHomeCache)
+	errHomeCacheWithin = fmt.Errorf("%w: cache is root, or a folder beneath it, so the kept cache would be part of the fresh home", ErrHomeCache)
+	errHomeCacheHolds  = fmt.Errorf("%w: cache holds root, so the fresh home would be part of the kept cache", ErrHomeCache)
+)
+
+// HomeEnvCache is HomeEnv(root) with XDG_CACHE_HOME pointed at cache itself, so a child keeps its
+// cache in a folder the caller keeps between runs while the rest of its home is fresh. No other
+// variable changes, and no name is given twice. XDG_CACHE_HOME is the one variable on any system
+// that names a cache folder alone, so the call reaches only what reads it: on Linux and the BSDs
+// os.UserCacheDir follows it and moves to cache; on macOS os.UserCacheDir is $HOME/Library/Caches,
+// which no variable names, and stays beneath root; on Windows it is LOCALAPPDATA, which also holds
+// programs' local data and settings, and stays beneath root. A tool's own cache variables, such as
+// GOCACHE and GOMODCACHE, are the caller's to set.
+//
+// It refuses, with an error that wraps ErrHomeCache and gives no list, an empty or relative root or
+// cache, a cache that is root or beneath it, and a cache that holds root. Folders are compared as
+// written, cleaned and with case folded on every system, and no link is followed. It does not judge
+// the cache folder's owner, mode or links, or whether it is there: that is the caller's part, as a
+// kept cache is a path from one run into the next. It makes no folder, as HomeEnv makes none.
+func HomeEnvCache(root, cache string) ([]string, error) {
+	if root == "" || !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("%w: %q", errHomeCacheRoot, root)
+	}
+	if cache == "" || !filepath.IsAbs(cache) {
+		return nil, fmt.Errorf("%w: %q", errHomeCacheCache, cache)
+	}
+	r, c := filepath.Clean(root), filepath.Clean(cache)
+	if beneath(c, r) {
+		return nil, fmt.Errorf("%w: %q beneath %q", errHomeCacheWithin, cache, root)
+	}
+	if beneath(r, c) {
+		return nil, fmt.Errorf("%w: %q holds %q", errHomeCacheHolds, cache, root)
+	}
+	env := homevars.Under(root)
+	for i, kv := range env {
+		if strings.HasPrefix(kv, homevars.Cache+"=") {
+			env[i] = homevars.Cache + "=" + c
+		}
+	}
+	return env, nil
+}
+
+// beneath is whether the clean, absolute path is dir or a folder beneath it, as written, with case
+// folded.
+func beneath(path, dir string) bool {
+	if strings.EqualFold(path, dir) {
+		return true
+	}
+	if !strings.HasSuffix(dir, string(filepath.Separator)) {
+		dir += string(filepath.Separator)
+	}
+	return len(path) > len(dir) && strings.EqualFold(path[:len(dir)], dir)
+}
