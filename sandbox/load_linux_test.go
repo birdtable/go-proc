@@ -1,0 +1,103 @@
+//go:build linux
+
+package sandbox
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+)
+
+// TestAProgramThatCannotBeReadForItsLoadFoldersIsRefusedBeforeAnythingIsSet: a #! script, a file
+// that is no ELF file, a FIFO and a program that is not there are each ErrUsage from Check, naming
+// the file, with the zero Block and no_new_privs still unset; RunHolding, in a process of its own,
+// refuses each the same way, and the script is not run.
+//
+// What it costs when this fails: a script runs behind folders told for no program, a FIFO where
+// the program is named holds its caller for ever, or the block is half set on a process that was
+// refused.
+func TestAProgramThatCannotBeReadForItsLoadFoldersIsRefusedBeforeAnythingIsSet(t *testing.T) {
+	t.Parallel()
+	dir := realTemp(t, "rw", "bin")
+	at := func(name string) string { return filepath.Join(dir, "bin", name) }
+	if err := os.WriteFile(at("script"), []byte("#!/bin/sh\necho the script ran\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at("text"), []byte("no program\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(at("fifo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := Folders{ReadWrite: []string{filepath.Join(dir, "rw")}, ReadOnly: []string{filepath.Join(dir, "bin")}}
+	for name, says := range map[string]string{
+		"script": "it is a #! script, and its interpreter is the program to run",
+		"text":   "it is not an ELF file",
+		"fifo":   "it is not a regular file",
+		"gone":   "it cannot be found",
+	} {
+		b, err := Check(f, at(name))
+		if !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || b != (Block{}) {
+			t.Errorf("Check of a %s: Block %+v, %v, want the zero Block and ErrUsage, never ErrNoBlock", name, b, err)
+		}
+		if err == nil || !strings.Contains(err.Error(), `the program "`+at(name)+`"`) || !strings.Contains(err.Error(), says) {
+			t.Errorf("Check of a %s: %v, want the file named and %q", name, err, says)
+		}
+		code, said := behindTheBlock(t, at(name))
+		if code != childUsage || !strings.Contains(said, `the program "`+at(name)+`"`) || !strings.Contains(said, says) || strings.Contains(said, "the script ran") {
+			t.Errorf("RunHolding of a %s: exit %d, said %q; want exit %d, the file named and %q", name, code, said, childUsage, says)
+		}
+	}
+	set, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, prGetNoNewPrivs, 0, 0)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	if set != 0 {
+		t.Errorf("no_new_privs is set after the refusals, so one set a step of the block")
+	}
+}
+
+// TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer: this system's true, a
+// program that names a loader, starts behind RunHolding and exits 0 when the caller names its own
+// folder alone, and false beside it exits 1, so the program is what ran. The plant: by RunHolding's
+// own steps with nothing left out it exits 0 again, and with any one folder RunHolding added left
+// out it does not start.
+//
+// What it costs when this fails: the folders RunHolding adds are not the ones this system's loader
+// reads, so a held program does not start, or one of them is a grant the program never needed.
+func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *testing.T) {
+	t.Parallel()
+	bin, err := filepath.EvalSymlinks("/bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog := filepath.Join(bin, "true")
+	dirs, err := loadHere(prog)
+	if err != nil {
+		t.Fatalf("the load folders of %s: %v", prog, err)
+	}
+	added := named{readOnly: []string{bin}}.with(dirs).readOnly[1:]
+	if len(added) == 0 {
+		t.Fatalf("%s loads from %q, none outside its own folder, so this system has no row", prog, dirs)
+	}
+	t.Logf("%s loads from %q, and RunHolding adds %q", prog, dirs, added)
+	for _, r := range []struct {
+		prog  string
+		leave []string
+		want  int
+	}{{prog, nil, 0}, {filepath.Join(bin, "false"), nil, 1}, {prog, []string{"-"}, 0}} {
+		if code, said := behindTheBlock(t, r.prog, r.leave...); code != r.want {
+			t.Errorf("%s behind the block with %s alone named, leaving out %q: exit %d, want %d: %s", r.prog, bin, r.leave, code, r.want, strings.TrimSpace(said))
+		}
+	}
+	for _, d := range added {
+		if code, said := behindTheBlock(t, prog, d); code == 0 {
+			t.Errorf("%s behind the block with the load folder %s left out: exit 0, want it not to start: %s", prog, d, strings.TrimSpace(said))
+		} else {
+			t.Logf("with %s left out: exit %d: %s", d, code, strings.TrimSpace(said))
+		}
+	}
+}

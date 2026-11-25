@@ -1,0 +1,672 @@
+# A shared base of lint rules for Go projects, with slot lines removed, and this repo's own rows below
+# (marked "This repo").
+# Shared golangci-lint base for Go projects.
+#
+# Written by hand, never generated. Each linter and setting names the rule ids
+# it holds; each of those rules names this file in its check. golangci-lint v2,
+# pinned at 2.15.0. This copy has the slot lines removed; the "# per-project:" lines name paths
+# only a project knows, and this repo's own rows are at the end.
+version: "2"
+
+run:
+  tests: true
+
+issues:
+  # go.errors.4, gates.plants.10: no cap, so repeats are not hidden.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # gates.plants.10: a second hit on one line still shows.
+  uniq-by-line: false
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose # go.style.4
+    - contextcheck # go.concurrency.1
+    - depguard # cli.config.7, cli.process.1, cli.look.1, arch.shared.7, arch.ports.11, tests.doubles.2, go.style.5; arch.layers.2/5/7/9, arch.ports.1/2/8 per project
+    - dupl # code.duplication.1 (the within-package tripwire)
+    - errorlint # go.errors.2 (wrapcheck stays off, same rule)
+    - exhaustive # code.idioms.3
+    - exptostd # code.idioms.2
+    - forbidigo # go.errors.3, go.errors.4, go.concurrency.1, cli.config.3, cli.config.5, cli.errors.3, cli.output.2, cli.process.1, arch.ports.1, arch.ports.23, tests.admission.5, tests.isolation.6
+    - gochecknoglobals # arch.ports.12
+    - gochecknoinits # go.layout.2
+    - gocognit # code.size.3
+    - gocritic # code.comments.3
+    - gocyclo # code.idioms.4
+    - godoclint # code.comments.4
+    - gomoddirectives # go.layout.3
+    - gosec # cli.process.1, supply.scans.3 (every rule)
+    - iface # arch.ports.10
+    - interfacebloat # go.style.1
+    - modernize # code.idioms.2
+    - noctx # go.concurrency.1, go.style.4
+    - nolintlint # gates.exemptions.1, gates.exemptions.2
+    - paralleltest # go.cycle.2, tests.runners.4: a test calls t.Parallel, or says "// serial: <why>" on a nolint
+    - revive # code.idioms.1, code.naming.1, code.comments.4, code.size.4, go.errors.4, go.concurrency.2, arch.structure.7
+    - sloglint # go.logging.1, go.logging.2
+    - thelper # go.style.5
+    - tparallel # go.cycle.2, tests.runners.4: a test and its subtests agree on t.Parallel
+    - usestdlibvars # code.idioms.2
+  # per-project: sqlclosecheck and rowserrcheck where database/sql is imported (go.style.4).
+
+  settings:
+    depguard:
+      rules:
+        # cli.config.7: flag parsing lives in cmd/ and the command packages only.
+        cli-flags:
+          files: ["$all", "!**/cmd/**"]
+          # per-project: also "!**/<command package>/**"
+          deny:
+            - pkg: flag
+              desc: "cli.config.7: flags are parsed in cmd/ only"
+            - pkg: github.com/spf13/pflag
+              desc: "cli.config.7: flags are parsed in cmd/ only"
+            - pkg: github.com/spf13/cobra
+              desc: "cli.config.7: flags are parsed in cmd/ only"
+            - pkg: github.com/urfave/cli
+              desc: "cli.config.7: flags are parsed in cmd/ only"
+        # cli.process.1: only the runner starts programs.
+        owner-exec:
+          files: ["$all"]
+          # This repo: proc is the runner, and its one import of os/exec carries its own nolint.
+          deny:
+            - pkg: os/exec
+              desc: "cli.process.1: start programs through the runner"
+        # cli.look.1, arch.shared.7: terminal libraries only in the shared UI module.
+        owner-ui:
+          files: ["$all"]
+          # per-project: "!**/<shared UI module>/**"
+          deny:
+            - pkg: golang.org/x/term
+              desc: "arch.shared.7: terminal detection belongs to the shared UI module"
+            - pkg: github.com/mattn/go-isatty
+              desc: "arch.shared.7: terminal detection belongs to the shared UI module"
+            - pkg: github.com/charmbracelet
+              desc: "cli.look.1: terminal styling belongs to the shared UI module"
+            - pkg: github.com/fatih/color
+              desc: "cli.look.1: terminal styling belongs to the shared UI module"
+            - pkg: github.com/muesli/termenv
+              desc: "cli.look.1: terminal styling belongs to the shared UI module"
+        # arch.ports.23: operating-system packages only in the host layer.
+        os-host:
+          files: ["$all", "!**/sandbox/*.go", "!**/load/*_linux.go", "!**/load/*_linux_test.go"]
+          # per-project: "!**/<host layer>/**"
+          deny:
+            - pkg: golang.org/x/sys
+              desc: "arch.ports.23: an operating-system package belongs to the host layer"
+            - pkg: github.com/gofrs/flock
+              desc: "arch.ports.23: an operating-system package belongs to the host layer"
+            - pkg: github.com/shirou/gopsutil
+              desc: "arch.ports.23: an operating-system package belongs to the host layer"
+        # The sandbox package calls Linux through golang.org/x/sys/unix, as is common
+        # practice, so its own files are out of os-host. Fail closed: in lax mode an allow wins only where
+        # it is longer than the deny, so every x/sys package but unix, today's or a later bump's, stays
+        # denied to them, as do os-host's other rows.
+        os-host-sandbox:
+          files: ["**/sandbox/*.go"]
+          list-mode: lax
+          allow:
+            - golang.org/x/sys/unix
+          deny:
+            - pkg: golang.org/x/sys
+              desc: "arch.ports.23: sandbox may import golang.org/x/sys/unix alone"
+            - pkg: github.com/gofrs/flock
+              desc: "arch.ports.23: an operating-system package belongs to the host layer"
+            - pkg: github.com/shirou/gopsutil
+              desc: "arch.ports.23: an operating-system package belongs to the host layer"
+        # The load package reads Linux's average by gopsutil's load.Avg, with the folder it reads
+        # pinned by gopsutil's common.EnvKey, so load's Linux files are out of os-host. Fail closed, as
+        # os-host-sandbox: in lax mode only those two packages are longer than the gopsutil deny, so
+        # gopsutil's process package and every other stays denied, as do os-host's other rows. The
+        # macOS build takes none of gopsutil: its darwin import brings purego's fakecgo.
+        os-host-load-linux:
+          files: ["**/load/*_linux.go", "**/load/*_linux_test.go"]
+          list-mode: lax
+          allow:
+            - github.com/shirou/gopsutil/v4/load
+            - github.com/shirou/gopsutil/v4/common
+          deny:
+            - pkg: golang.org/x/sys
+              desc: "arch.ports.23: an operating-system package belongs to the host layer"
+            - pkg: github.com/gofrs/flock
+              desc: "arch.ports.23: an operating-system package belongs to the host layer"
+            - pkg: github.com/shirou/gopsutil
+              desc: "arch.ports.23: load's Linux files may import gopsutil/v4/load and gopsutil/v4/common alone"
+        # arch.ports.11: wire by hand in the entry point.
+        no-di:
+          files: ["$all"]
+          deny:
+            - pkg: go.uber.org/fx
+              desc: "arch.ports.11: no dependency-injection framework"
+            - pkg: go.uber.org/dig
+              desc: "arch.ports.11: no dependency-injection framework"
+            - pkg: github.com/google/wire
+              desc: "arch.ports.11: no dependency-injection framework"
+            - pkg: github.com/samber/do
+              desc: "arch.ports.11: no dependency-injection framework"
+        # go.style.5: tests use the standard testing package only; no assertion
+        # library.
+        no-assert:
+          files: ["$test"]
+          deny:
+            - pkg: github.com/stretchr/testify
+              desc: "go.style.5: a test uses the standard testing package only"
+            - pkg: gotest.tools
+              desc: "go.style.5: a test uses the standard testing package only"
+            - pkg: github.com/onsi/gomega
+              desc: "go.style.5: a test uses the standard testing package only"
+            - pkg: github.com/onsi/ginkgo
+              desc: "go.style.5: a test uses the standard testing package only"
+            - pkg: github.com/matryer/is
+              desc: "go.style.5: a test uses the standard testing package only"
+            - pkg: github.com/frankban/quicktest
+              desc: "go.style.5: a test uses the standard testing package only"
+        # tests.doubles.2: no mock library; a fake is written by hand.
+        no-mocks:
+          files: ["$all"]
+          deny:
+            - pkg: github.com/golang/mock
+              desc: "tests.doubles.2: no mock library"
+            - pkg: go.uber.org/mock
+              desc: "tests.doubles.2: no mock library"
+            - pkg: github.com/stretchr/testify/mock
+              desc: "tests.doubles.2: no mock library"
+            - pkg: github.com/vektra/mockery
+              desc: "tests.doubles.2: no mock library"
+        # This repo: the ban rows of go-proc's chosen modules. Each
+        # denies, in every file, a module that does a job go-proc already does with its pick, and stays only for
+        # the security or correctness reason its desc states, never a preference. A pick's
+        # module banned above is not banned twice: os/exec is owner-exec's, github.com/shirou/gopsutil is
+        # os-host's.
+        # child-process: proc runs a child, its tree and its Job Object on os/exec and golang.org/x/sys.
+        child-process:
+          files: ["$all"]
+          deny:
+            - pkg: github.com/go-cmd/cmd
+              desc: "child-process, correctness: a second runner, and it kills no whole tree by a Job Object on Windows, so a grandchild outlives the stop"
+            - pkg: k8s.io/utils/exec
+              desc: "child-process, correctness: a second runner, and it kills no whole tree by a Job Object on Windows, so a grandchild outlives the stop"
+            - pkg: github.com/kolesnikovae/go-winjob
+              desc: "child-process, correctness: it opens an existing named job as if it were new, and has no arm64 build"
+            - pkg: github.com/tg123/jobobject
+              desc: "child-process, correctness: it panics on Go 1.27"
+        # login-service: the service package drives systemctl, launchctl and schtasks with the unit text its
+        # caller writes.
+        login-service:
+          files: ["$all"]
+          deny:
+            - pkg: github.com/kardianos/service
+              desc: "login-service, correctness: a system service through the SCM or root, with no timer and no per-user Windows task without an administrator, both of which service does"
+            - pkg: github.com/takama/daemon
+              desc: "login-service, correctness: a system service through the SCM or root, with no timer and no per-user Windows task without an administrator, both of which service does"
+        # sandbox: the sandbox package holds the block, with go-landlock for the Landlock ruleset.
+        sandbox:
+          files: ["$all"]
+          deny:
+            - pkg: github.com/elastic/go-seccomp-bpf
+              desc: "sandbox, security: its arch guard falls through to the default ALLOW, so an i386 call on amd64 or an AArch32 call on arm64 passes unjudged, and it compares ioctl's request on 64 bits, so TIOCSTI|1<<32 is let through"
+            - pkg: github.com/seccomp/libseccomp-golang
+              desc: "sandbox, correctness: it needs cgo and an LGPL C library, which breaks the CGO_ENABLED=0 build the README promises"
+            - pkg: github.com/criyle/go-sandbox
+              desc: "sandbox, correctness: a second process runner beside proc, Linux-only and on ptrace, so a caller on it loses the Windows tree kill"
+            - pkg: github.com/tailscale/wf
+              desc: "sandbox, correctness: WFP needs an administrator, and sandbox runs unprivileged"
+        # landlock-threads: psx comes with go-landlock, to restrict every thread, and only the sandbox
+        # package's own files call it.
+        landlock-threads:
+          files: ["$all", "!**/sandbox/*.go"]
+          deny:
+            - pkg: kernel.org/pub/linux/libs/security/libcap/psx
+              desc: "landlock-threads: psx is the sandbox package's, through go-landlock"
+        # std-synctest: a clock in a test is testing/synctest's, the only one that reaches the timers of
+        # os/exec and context.
+        std-synctest:
+          files: ["$all"]
+          deny:
+            - pkg: github.com/benbjohnson/clock
+              desc: "std-synctest, correctness: a fake clock reaches only the timers passed through it, and proc's deadlines run in os/exec (WaitDelay) and in context, which no fake clock reaches, so a test on one passes against a clock the code does not use; testing/synctest reaches them"
+            - pkg: github.com/jonboulle/clockwork
+              desc: "std-synctest, correctness: a fake clock reaches only the timers passed through it, and proc's deadlines run in os/exec (WaitDelay) and in context, which no fake clock reaches, so a test on one passes against a clock the code does not use; testing/synctest reaches them"
+            - pkg: github.com/coder/quartz
+              desc: "std-synctest, correctness: a fake clock reaches only the timers passed through it, and proc's deadlines run in os/exec (WaitDelay) and in context, which no fake clock reaches, so a test on one passes against a clock the code does not use; testing/synctest reaches them"
+        # per-project (go.logging.1, daemon kind only):
+        # no-std-log:
+        #   files: ["$all"]
+        #   deny:
+        #     - pkg: log
+        #       desc: "go.logging.1: log through the shared slog logger"
+        # per-project (arch.layers.2, arch.layers.5, arch.layers.7, arch.layers.9,
+        # arch.ports.1, arch.ports.2, arch.ports.8): the layer and port rows are
+        # rendered from the project's layer table, never written here.
+        # arch.shared.8: the ban on each shared primitive's import outside its
+        # owner is rendered from the project's shared registry, never written here.
+        # This repo: the layer rows, written here by hand, as nothing renders them (hatch builds
+        # no layers command). Each package of layers.yaml has two: layers-<path> holds its
+        # code to the module's packages it may import, and layers-<path>-tests holds its test files to those,
+        # what its tests may import beside them, and the package itself. layers-no-row holds every other file
+        # of the module to none of the module's packages, so a package with no row imports nothing of it. A
+        # row denies the module's path, the root exactly and every path under it, so a module named
+        # go-proc-other is not taken for it, and in lax mode an allow wins only where it is longer than that
+        # deny: each allow is one package, exactly, with $, so gitenv allows gitenv and not gitenv/gittest.
+        # A file is in a row by its folder's name, the last folders of its path, as layers.yaml names it.
+        # task layers holds each rule red on a planted import (gate/layers/testdata), in the push and
+        # release tiers.
+        layers-gitenv:
+          files: ["**/gitenv/*.go", "!$test"]
+          list-mode: lax
+          deny: &layers-deny
+            - pkg: github.com/birdtable/go-proc$
+              desc: "a package imports of the module only what its layers rule allows (layers.yaml)"
+            - pkg: github.com/birdtable/go-proc/
+              desc: "a package imports of the module only what its layers rule allows (layers.yaml)"
+        layers-gitenv-tests:
+          files: ["**/gitenv/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/gitenv$]
+          deny: *layers-deny
+        layers-gitenv/gittest:
+          files: ["**/gitenv/gittest/*.go", "!$test"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/gitenv$]
+          deny: *layers-deny
+        layers-gitenv/gittest-tests:
+          files: ["**/gitenv/gittest/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/gitenv$, github.com/birdtable/go-proc/gitenv/gittest$]
+          deny: *layers-deny
+        layers-sandbox:
+          files: ["**/sandbox/*.go", "!$test"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/proc$]
+          deny: *layers-deny
+        layers-sandbox-tests:
+          files: ["**/sandbox/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/sandbox$, github.com/birdtable/go-proc/proc$, github.com/birdtable/go-proc/load$]
+          deny: *layers-deny
+        layers-sandbox/cmd/netblock:
+          files: ["**/sandbox/cmd/netblock/*.go", "!$test"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/sandbox$]
+          deny: *layers-deny
+        layers-sandbox/cmd/netblock-tests:
+          files: ["**/sandbox/cmd/netblock/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/sandbox/cmd/netblock$, github.com/birdtable/go-proc/sandbox$]
+          deny: *layers-deny
+        layers-proc:
+          files: ["**/proc/*.go", "!$test"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/internal/homevars$]
+          deny: *layers-deny
+        layers-proc-tests:
+          files: ["**/proc/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/proc$, github.com/birdtable/go-proc/internal/homevars$]
+          deny: *layers-deny
+        layers-internal/homevars:
+          files: ["**/internal/homevars/*.go", "!$test"]
+          list-mode: lax
+          deny: *layers-deny
+        layers-internal/homevars-tests:
+          files: ["**/internal/homevars/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/internal/homevars$]
+          deny: *layers-deny
+        layers-load:
+          files: ["**/load/*.go", "!$test"]
+          list-mode: lax
+          deny: *layers-deny
+        layers-load-tests:
+          files: ["**/load/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/load$, github.com/birdtable/go-proc/proc$]
+          deny: *layers-deny
+        layers-service:
+          files: ["**/service/*.go", "!$test"]
+          list-mode: lax
+          deny: *layers-deny
+        layers-service-tests:
+          files: ["**/service/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/service$]
+          deny: *layers-deny
+        layers-internal/example/secondconsumer:
+          files: ["**/internal/example/secondconsumer/*.go", "!$test"]
+          list-mode: lax
+          deny: *layers-deny
+        layers-internal/example/secondconsumer-tests:
+          files: ["**/internal/example/secondconsumer/*_test.go"]
+          list-mode: lax
+          allow:
+            - github.com/birdtable/go-proc/internal/example/secondconsumer$
+            - github.com/birdtable/go-proc/gitenv$
+            - github.com/birdtable/go-proc/gitenv/gittest$
+            - github.com/birdtable/go-proc/load$
+            - github.com/birdtable/go-proc/proc$
+            - github.com/birdtable/go-proc/sandbox$
+            - github.com/birdtable/go-proc/service$
+          deny: *layers-deny
+        layers-internal/contract:
+          files: ["**/internal/contract/*.go", "!$test"]
+          list-mode: lax
+          deny: *layers-deny
+        layers-internal/contract-tests:
+          files: ["**/internal/contract/*_test.go"]
+          list-mode: lax
+          allow: [github.com/birdtable/go-proc/gitenv$, github.com/birdtable/go-proc/gitenv/gittest$, github.com/birdtable/go-proc/proc$]
+          deny: *layers-deny
+        layers-no-row:
+          files:
+            - "$all"
+            - "!**/gitenv/*.go"
+            - "!**/gitenv/gittest/*.go"
+            - "!**/sandbox/*.go"
+            - "!**/sandbox/cmd/netblock/*.go"
+            - "!**/proc/*.go"
+            - "!**/internal/homevars/*.go"
+            - "!**/load/*.go"
+            - "!**/service/*.go"
+            - "!**/internal/example/secondconsumer/*.go"
+            - "!**/internal/contract/*.go"
+          deny:
+            - pkg: github.com/birdtable/go-proc$
+              desc: "a package with no row in layers.yaml imports nothing of the module"
+            - pkg: github.com/birdtable/go-proc/
+              desc: "a package with no row in layers.yaml imports nothing of the module"
+
+    dupl:
+      threshold: 60 # code.duplication.1
+
+    errcheck:
+      # go.errors.1, go.errors.3 (tests excluded below)
+      check-type-assertions: true
+      check-blank: true
+
+    exhaustive:
+      default-signifies-exhaustive: true # code.idioms.3 (tests excluded below)
+
+    forbidigo:
+      analyze-types: true # go.errors.3, go.concurrency.1, cli.config.3, cli.output.2, tests.isolation.6
+      forbid:
+        - pattern: ^panic$
+          msg: "go.errors.3: panic is for programmer errors; outside main and tests it needs an allow-list entry"
+        - pattern: ^os\.Exit$
+          msg: "go.errors.4: only main exits"
+        - pattern: ^log\.(Fatal|Fatalf|Fatalln)$
+          msg: "go.errors.4: only main exits"
+        - pattern: ^context\.(Background|TODO)$
+          msg: "go.concurrency.1: take the context from the caller"
+        - pattern: ^os\.(Getenv|LookupEnv|Environ)$
+          msg: "cli.config.3: read the environment in the config package"
+        - pattern: ^os\.(UserConfigDir|UserCacheDir|UserHomeDir)$
+          msg: "cli.config.5: folders come from the paths helper"
+        - pattern: ^fmt\.(Print|Printf|Println)$
+          msg: "cli.errors.3: write through the injected writer or the terminal module"
+        - pattern: ^os\.(Stdout|Stderr)$
+          msg: "cli.errors.3: write through the injected writer or the terminal module"
+        - pattern: ^json\.(NewEncoder|Marshal|MarshalIndent)$
+          pkg: ^encoding/json$
+          msg: "cli.output.2: JSON output is written by the root command only"
+        - pattern: ^os\.StartProcess$
+          msg: "cli.process.1: start programs through the runner"
+        - pattern: ^syscall\.(ForkExec|Exec|StartProcess)$
+          msg: "cli.process.1: start programs through the runner"
+        - pattern: ^runtime\.(GOOS|GOARCH)$
+          msg: "arch.ports.1, arch.ports.23: platform checks belong in the host layer"
+        - pattern: ^testing\.(T|B|F)\.(Skip|Skipf|SkipNow)$
+          msg: "tests.admission.5: a skip needs an allow-list entry and a reason"
+        - pattern: ^time\.Sleep$
+          msg: "tests.isolation.6: no sleep in a test; wait on a signal"
+        # This repo: go-landlock's BestEffort turns a refusal the kernel gives into a
+        # block that is not there. The sandbox asks for the ABI it needs and fails when it is absent.
+        - pattern: ^landlock\.Config\.BestEffort$
+          msg: "go-proc: BestEffort lowers a Landlock request the kernel refuses; ask for the ABI the block needs"
+        # This repo: on Windows a process a test starts itself, outside the test binary's
+        # job, outlives the binary when it is killed. proc's tests start one only through
+        # startTestProcess, which puts it in that job; the exclusions below scope the rule to proc's
+        # test files that build on Windows.
+        - pattern: ^exec\.Cmd\.(Start|Run|Output|CombinedOutput)$
+          msg: "proc-test-start: a proc test starts a process through startTestProcess, so a killed test binary takes it with it"
+        # This repo (x/sys): a raw system call, of package syscall or of
+        # golang.org/x/sys/unix, is made only in a file built for one system, where its numbers are that
+        # system's: Syscall and RawSyscall with each numbered or N form, their NoError forms, and
+        # AllThreadsSyscall, the call on every thread that is the landlock-threads row's job. The exclusion
+        # below names those files.
+        - pattern: ^(syscall|unix)\.(AllThreads|Raw)?Syscall(6|9|12|15|18|N)?(NoError)?$
+          pkg: ^(syscall|golang\.org/x/sys/unix)$
+          msg: "raw-syscall: a raw system call is made only in a file built for one system"
+        # This repo (sandbox): Landlock is go-landlock's. Its named call numbers,
+        # constants and structs are not written again through golang.org/x/sys/unix or syscall. The row
+        # matches names: a raw call by its bare number is left to review.
+        - pattern: ^(unix|syscall)\.(SYS_LANDLOCK_[A-Z_]+|LANDLOCK_[A-Z0-9_]+|Landlock[A-Za-z]*Attr)$
+          pkg: ^(syscall|golang\.org/x/sys/unix)$
+          msg: "landlock: Landlock goes through go-landlock, never a Landlock call number, constant or struct of our own"
+        # arch.shared.8: the ban on each shared primitive's call outside its owner
+        # is rendered from the project's shared registry, never written here.
+        # per-project (cli.errors.2, cli.look.4, cli.look.5, cli.output.5): the
+        # shared UI module's literals and constructors, for example
+        #   ^ui\.(Ending|Refusal)$, ^lipgloss\.Style\.(Padding|Margin|Width)$,
+        #   flag definitions of the module's flag names.
+        # per-project (arch.ports.6, arch.shared.8, cli.config.2): sibling names,
+        #   shared exports and config decodes named in rule data.
+
+    gocognit:
+      min-complexity: 20 # code.size.3 (tests excluded below)
+
+    gocritic:
+      # code.comments.3: commentedOutCode only.
+      disable-all: true
+      enabled-checks:
+        - commentedOutCode
+
+    gocyclo:
+      min-complexity: 30 # code.idioms.4
+
+    gomoddirectives:
+      # go.layout.3: no replace lines at all.
+      replace-local: false
+      replace-allow-list: []
+
+    gosec:
+      # supply.scans.3: every rule runs, G201, G202, G204 and G404 among them, and no
+      # includes or excludes list narrows it; an exclusion below names its rule
+      # ids, its paths and its reason (internal/contexts_test.go holds the four).
+      config:
+        global:
+          # cli.process.1, gates.exemptions.1: a #nosec comment silences
+          # nothing; a suppression is a nolint with its reason, counted.
+          nosec: true
+
+    govet:
+      enable:
+        - waitgroup # go.concurrency.2 (on top of the default analyzers, code.format.2)
+
+    iface:
+      enable: # arch.ports.10
+        - identical
+        - unused
+        - opaque
+
+    interfacebloat:
+      max: 10 # go.style.1
+
+    nolintlint:
+      # gates.exemptions.1, gates.exemptions.2
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+
+    paralleltest:
+      # go.cycle.2, tests.runners.4: a test that runs alone is written
+      # //nolint:paralleltest // serial: <the process state it needs>; the
+      # project's suppression list holds the text, since nolintlint cannot.
+      ignore-missing: false
+      ignore-missing-subtests: false
+
+    revive:
+      rules:
+        - name: early-return # code.idioms.1
+        - name: indent-error-flow # code.idioms.1
+        - name: exported # code.naming.1 (stutter check on), code.comments.4
+        - name: var-naming # code.naming.1
+        - name: package-naming # arch.structure.7
+          arguments:
+            - check-extra-bad-name: true
+              user-defined-bad-names: [helpers, types, models, interfaces, base, other, misc]
+        - name: argument-limit # code.size.4
+          arguments: [6]
+        - name: deep-exit # go.errors.4
+        - name: datarace # go.concurrency.2
+        - name: waitgroup-by-value # go.concurrency.2
+        - name: forbidden-call-in-wg-go # go.concurrency.2
+
+    sloglint:
+      # go.logging.1, go.logging.2
+      no-global: all
+      static-msg: true
+      kv-only: true
+
+    thelper:
+      # go.style.5: a helper calls t.Helper first. Where the testing value sits
+      # in the parameters and what it is named are not the rule.
+      test: {begin: true, first: false, name: false}
+      benchmark: {begin: true, first: false, name: false}
+      tb: {begin: true, first: false, name: false}
+      fuzz: {begin: true, first: false, name: false}
+
+    staticcheck:
+      # code.format.2: all groups, the non-default ST checks off except
+      # ST1003, which code.naming.1 asks for. ST1005 stays on (go.errors.5 is
+      # not ruled yet; a project that keeps sentence-style errors excludes it).
+      checks:
+        - all
+        - -ST1000
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+
+  exclusions:
+    # code.comments.4: no exclusion presets, so the comments preset stays off.
+    presets: []
+    # cli.process.1, gates.exemptions.1: a generated-file header silences no
+    # linter; golangci-lint v2 reads one loosely by default and drops the whole
+    # file. A suppression is a nolint with its reason, counted.
+    generated: disable
+    # Keep this list last in the file: a project's own exclusion rules are
+    # list items appended below its overrides line.
+    rules:
+      # go.errors.1, code.idioms.3, code.size.3, code.duplication.1: non-test
+      # code only; a test's table of cases repeats by design.
+      - path: _test\.go$
+        linters: [dupl, errcheck, exhaustive, gocognit]
+      # supply.scans.3: a test reads and writes its own temp folders and testdata,
+      # builds its inputs from planted values, and plants credential-shaped strings
+      # that the secret scan reads with every file; G104 is errcheck's, as above.
+      - path: _test\.go$
+        linters: [gosec]
+        text: "G(101|104|115|122|301|302|304|306|703):"
+      # go.errors.3, go.errors.4: main and tests may panic and exit.
+      - path: (^|/)cmd/|_test\.go$
+        linters: [forbidigo]
+        text: "go\\.errors\\.[34]:"
+      # go.concurrency.1: a root context is made in main and in tests.
+      - path: (^|/)cmd/[^/]+/main\.go$|_test\.go$
+        linters: [forbidigo]
+        text: "go\\.concurrency\\.1:"
+      # cli.config.3: the config package and main read the environment; only
+      # the config package's own files, not a package below it.
+      # This repo: a test reads the environment testkit.Main made with std's os.Environ and os.LookupEnv.
+      # gitenv/gittest's Git reads the same.
+      - path: (^|/)cmd/[^/]+/main\.go$|(^|/)internal/config/[^/]+\.go$|(^|/)gitenv/gittest/|_test\.go$
+        linters: [forbidigo]
+        text: "cli\\.config\\.3:"
+      # cli.errors.3: main wires the process streams into run.
+      # per-project: add the terminal module path.
+      - path: (^|/)cmd/[^/]+/main\.go$
+        linters: [forbidigo]
+        text: "cli\\.errors\\.3:"
+      # cli.output.2: only the command path is checked: cmd/ and the command
+      # tree under internal/cli/.
+      # per-project: add the root command file.
+      - path-except: (^|/)cmd/|(^|/)internal/cli/
+        linters: [forbidigo]
+        text: "cli\\.output\\.2:"
+      # tests.admission.5, tests.isolation.6: test files only.
+      - path-except: _test\.go$
+        linters: [forbidigo]
+        text: "tests\\.(admission\\.5|isolation\\.6):"
+      # This repo's rows. Each says why, and which ticket retires it.
+      # tests.admission.5: the skip allowed, by its own line and reason. It skips, only
+      # under -short (the push tier's run), a row that waits out a real deadline; the release tier and
+      # every native run run it, and task test fails on any skip. Stays while the row waits.
+      - path: (^|/)proc/proc_unix_test\.go$
+        linters: [forbidigo]
+        source: "t\\.Skip\\(\"release tier: waits out a 3 s Timeout\"\\)"
+      # tests.admission.5: the same, for the row whose writer blocks past a 3 s
+      # Timeout while the tree is killed. Stays while the row waits.
+      - path: (^|/)proc/sink_test\.go$
+        linters: [forbidigo]
+        source: "t\\.Skip\\(\"release tier: waits out a 3 s Timeout\"\\)"
+      # The start rule (message "proc-test-start:") holds proc's test files that build on Windows, and no other file. The
+      # files of startTestProcess itself start processes, and the test files that build only off
+      # Windows are not held by it. Stays for as long as the tests start processes on Windows.
+      - path-except: (^|/)proc/[^/]*_test\.go$
+        linters: [forbidigo]
+        text: "proc-test-start:"
+      - path: (^|/)proc/(start_(windows|other)|[^/]*_(unix|darwin|linux|bsd|other))_test\.go$
+        linters: [forbidigo]
+        text: "proc-test-start:"
+      # The TestMain of every package reads the environment and the folders testkit.Main gave the run, to
+      # plant and check them (cli.config.3, cli.config.5).
+      - path: (^|/)(gitenv|gitenv/gittest|proc|sandbox|service)/main_test\.go$
+        linters: [forbidigo]
+        text: "cli\\.config\\.[35]:"
+      # The tests of gitenv, gitenv/gittest and proc start git, sh and go themselves, to see what a child of theirs
+      # sees, and service/live_test.go (built only with -tags live) runs systemctl, launchctl or
+      # schtasks as the Runner it hands the package; the runner's own tests are the ones that may.
+      - path: (^|/)(gitenv|gitenv/gittest|proc)/[^/]*_test\.go$|(^|/)service/live_test\.go$
+        linters: [depguard]
+        text: "cli\\.process\\.1:"
+      # A test whose body opens with "// serial: <why>" cannot run in parallel; paralleltest does not read
+      # that line, so each is named here. These stay for as long as the process state they hold is
+      # process-wide.
+      - path: (^|/)proc/(proc_unix|group_darwin|detach_darwin|cgroup_serial_linux)_test\.go$|(^|/)sandbox/release_linux_test\.go$|(^|/)service/taskdir_windows_test\.go$
+        linters: [paralleltest]
+        text: "missing the call to method parallel"
+      # Each stores nil in its package's exported error vars and restores them, which every test of the
+      # package reads.
+      - path: (^|/)(load|proc|sandbox|service)/stored_test\.go$
+        linters: [paralleltest]
+        text: "missing the call to method parallel"
+      # cli.errors.3: the proc tests run their own binary as the child program, a helper; a helper writes
+      # to its own stdout and stderr, which are the streams the run under test reads, and hands them to a
+      # child it starts. Only the helpers' files, and only cli.errors.3.
+      - path: (^|/)proc/(main|helper_[a-z]+)_test\.go$
+        linters: [forbidigo]
+        text: "cli\\.errors\\.3:"
+      # service/host.go is the service package's host layer: the one file that asks which system
+      # this is and where its unit folders are, and every call of the package goes through it. It stays for
+      # as long as the package has no host layer of the module to ask.
+      - path: (^|/)service/host\.go$
+        linters: [forbidigo]
+        text: "arch\\.ports\\.1, arch\\.ports\\.23:|cli\\.config\\.5:"
+      # G204: the same file's Runner runs the argv the package built for this system's tool, as the
+      # caller's Runner does.
+      - path: (^|/)service/live_test\.go$
+        linters: [gosec]
+        text: "G204:"
+      # G304: service/install.go reads a plist only at a plan's file path, which check has held to an absolute,
+      # clean path in one of Folders(), the user's LaunchAgents on macOS.
+      - path: (^|/)service/install\.go$
+        linters: [gosec]
+        text: "G304:"
+      # x/sys: a raw system call is allowed only in a file built for one system: one whose name
+      # Go itself reads as that system (_linux, _darwin or _windows, an architecture after it, _test last),
+      # and sandbox/cmd/netblock/proof_test.go, built only for Linux on amd64 and arm64 and for macOS by its
+      # go:build line. Stays for as long as those files make raw calls.
+      - path: _(linux|darwin|windows)(_(amd64|arm64))?(_test)?\.go$|(^|/)sandbox/cmd/netblock/proof_test\.go$
+        linters: [forbidigo]
+        text: "raw-syscall:"

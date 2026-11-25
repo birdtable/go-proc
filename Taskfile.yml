@@ -1,0 +1,341 @@
+version: "3"
+
+# The tools are pinned in tools/<tool>.mod and built by go tool on first use;
+# nothing is installed on the machine. A tier is a task whose members run together
+# (deps:), each member with a timeout: on its cmds line, go-run's, never under a minute
+# and at least three times the member's measured time, so a first run that builds the
+# pinned tool fits too. A member waits only for one it needs; none of these needs
+# another, so none waits. Each tier's budget step is gate/budget.sh, which has hatch budget
+# hold it to its budget in budgets.yaml: the
+# commit and release tiers by their elapsed seconds, the push tier by its members' CPU time.
+# hatch is pinned in tools/hatch.mod and called through go tool, as
+# test calls hatch tests.
+#
+# CGO_ENABLED is written in front of each command that builds or tests, 0 for vet,
+# build and lint and 1 for the race test, because a value in the shell beats one in
+# this file's env. The tests' GORACE gets atexit_sleep_ms=0 after whatever the shell
+# gives it: the tests start the race-built test binary as their helpers, and each
+# helper's exit would otherwise be held a second.
+#
+# The push tier runs the tests with -short: a row that waits out a real deadline skips
+# there with a message that begins "release tier: ", and runs in the release tier and
+# in every native run, which run task test, the whole suite with no skip.
+
+env:
+  GOWORK: "off"
+
+# GATE is tools/gate, the Go a member calls where it had pipes, awk, grep, shell loops or a temporary
+# file joined in shell: a module of its own, so go-proc's go.mod, lint and
+# layer rows are as they were. task taskfile holds this file to Go, by go-testkit's taskfile check.
+vars:
+  TOOL: go tool -modfile=tools
+  GATE: CGO_ENABLED=0 go -C tools/gate run . -top {{.ROOT_DIR}}
+  GORACE_TESTS: '${GORACE:+$GORACE }atexit_sleep_ms=0'
+
+tasks:
+  default:
+    desc: list the tasks
+    cmds:
+      - go tool -modfile=tools/task.mod task --list
+
+  hooks:
+    desc: point git at hooks/, once per clone
+    cmds:
+      - cmd: git config core.hooksPath hooks
+        timeout: 1m
+
+  fmt:
+    desc: fail on a file gofmt would change
+    cmds:
+      - cmd: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "gofmt would change:"; echo "$out"; exit 1; fi
+        timeout: 1m
+
+  # vet also type-checks linux/mips64le, where syscall.Stat_t.Dev is 32 bits, not the 64 of every
+  # system above: a compare of st.Dev with a uint64 that has no conversion then fails the tier, not a
+  # consumer's build. Vet type-checks every file, so the
+  # build matrix need not take it.
+  vet:
+    desc: go vet for each system, and linux/mips64le for its 32-bit Stat_t.Dev
+    cmds:
+      - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
+        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go vet ./...
+        timeout: 5m
+      - cmd: CGO_ENABLED=0 GOOS=linux GOARCH=mips64le go vet ./...
+        timeout: 5m
+
+  # example runs the second consumer: each package's main path through the
+  # exported API with values unlike ours, red wherever a package fills in a value of ours.
+  example:
+    desc: the second-consumer example, with values unlike ours
+    cmds:
+      - cmd: CGO_ENABLED=0 go test -count=1 ./internal/example/...
+        timeout: 1m
+
+  # taskfile holds this file to Go: go-testkit's taskfile check
+  # (taskfile/v0.1.0), run as tools/gate's test, fails on a shell utility, a pipe, a redirection to or
+  # from a file, a shell loop, a /tmp path or a path joined in shell in any command here. A command
+  # kept in shell would be a line of taskfile-exceptions.txt with its reason; none is.
+  taskfile:
+    desc: Taskfile.yml calls Go, by go-testkit's taskfile check
+    cmds:
+      - cmd: CGO_ENABLED=0 go -C tools/gate test -count=1 ./...
+        timeout: 5m
+
+  build:
+    desc: go build for each system
+    cmds:
+      - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
+        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build ./...
+        timeout: 5m
+
+  # lint's timeout is 20m: on a cold Windows release runner its three golangci-lint runs share 4 cores
+  # with the race tests, and 10m was too short there.
+  lint:
+    desc: golangci-lint for each of the three systems, run together
+    cmds:
+      - cmd: '{{.GATE}} lint'
+        timeout: 20m
+
+  # layers holds the layer rows of .golangci.yml red. Each planted package under
+  # gate/layers/testdata is named a row of layers.yaml by its folder, or none (norow), and each of its
+  # imports that the row does not allow ends in "// want <rule>". depguard alone lints them, and the
+  # file, line and rule of each issue it gives must be those of the want lines, no more and no fewer:
+  # a rule that lets a planted import through, or names another rule, or a fixture that fails to load,
+  # is red. go list loads a testdata folder only when it is named, so the folders are the ones the
+  # want lines are in. Then depguard alone lints the module on linux and windows with the tags the
+  # lint task builds without, live and race, so a file built only with one of them is held to its
+  # row too. Its timeout is 10m: on a cold release runner golangci-lint loads the module three times
+  # beside the race tests, and 5m was too short there.
+  layers:
+    desc: depguard's layer rows go red on each planted import, naming the rule, and hold the files behind the live and race tags
+    cmds:
+      - cmd: '{{.GATE}} layers'
+        timeout: 10m
+
+  # test is judged by hatch tests: a failure, no test run, or any test skipped is red, the
+  # skipped named. It holds the stream, prints it on a red and drops it on a green, and kills the
+  # run, tree and all, at its --timeout. go test's own -timeout is under hatch's and hatch's under
+  # the member's, so a test that hangs is reported by go test, with every goroutine's stack, before
+  # either kills the run. hatch counts leaf tests only, so a parent that calls t.Skip after its
+  # subtests passed is not red here, as it was under the grep this replaced; go-proc has none.
+  # test-short and namespace keep their own judges: hatch has no rule for a skip that says it runs
+  # in the release tier, and namespace runs go test under tini.
+  test:
+    desc: the whole suite with the race detector, shuffled, and no skip, judged by hatch tests; the release tier's, and every native run's
+    cmds:
+      - cmd: GORACE="{{.GORACE_TESTS}}" CGO_ENABLED=1 {{.TOOL}}/hatch.mod hatch tests --timeout 9m --red-when failed,none-ran,any-skipped --green-word passed --red-word failed -count=1 -race -shuffle=on -timeout 8m ./...
+        timeout: 10m
+
+  # test-short is the push tier's suite: -race and -short, with neither -count=1 nor -shuffle,
+  # either of which keeps go test from its cache, so a package whose test binary and the files
+  # and variables its tests read are unchanged is not run again. task test,
+  # the release tier's, runs every package every time, shuffled. Its json goes to a folder of its own
+  # in the system's temporary folder, which tools/gate makes and removes, never into the module: a file the run writes there
+  # while the tests read the module's tree changes what they read, and go test then runs their
+  # packages again every time. test-short skips only a row that says it runs in the release
+  # tier. Each skipped test is matched with its own output, by package and name, and a skip
+  # whose output holds no line beginning "release tier: " fails the run, as any skip fails
+  # task test.
+  test-short:
+    desc: the suite with the race detector and -short, from the test cache where nothing changed; a skip passes only if it says it runs in the release tier
+    cmds:
+      - cmd: '{{.GATE}} test-short'
+        timeout: 5m
+
+  # namespace runs proc's tests in a user and pid namespace of their own, under tini, an init that
+  # reaps. Run and Stop signal the tree of nearly every
+  # row there, so the rows are proc's whole package, NS_PKGS, not a list of names that would drift: in
+  # the namespace a kill that goes wrong reaches only the namespace's own processes. gotestsum prints
+  # each row it runs, by name. Every row runs, as in task test, and a skip fails. unshare (util-linux)
+  # and tini are the two tools this file does not pin, and on Linux a missing one is red. On any other
+  # system the task says it has nothing to run and exits 0, by the system tools/gate runs on.
+  # It runs with -count=1 and -shuffle=on unless CACHED is set, as the push tier alone sets it,
+  # which then takes proc's result from the test cache where nothing it reads changed;
+  # the release tier pins it empty. Its json goes outside the module, as test-short's does.
+  namespace:
+    desc: proc's tests in a user and pid namespace of their own, under tini (Linux; elsewhere nothing to run)
+    vars:
+      NS_PKGS: ./proc/
+    cmds:
+      - cmd: '{{.GATE}} namespace {{if .CACHED}}-cached {{end}}{{.NS_PKGS}}'
+        timeout: 10m
+
+  # gitleaks git passes, having scanned 0 commits, where git reads no history:
+  # a tree taken from a tarball, or a .git it may not read. So secrets asks git
+  # first, by git's own exit, and fails with a line that says why; gitleaks'
+  # own exit then decides the scan.
+  secrets:
+    desc: gitleaks over the committed history. Fails where this tree has no history of its own to scan.
+    cmds:
+      - cmd: |
+          why=""
+          if ! top="$(git rev-parse --show-cdup 2>/dev/null)"; then
+            why="git reads no repository here (no .git, or one it may not read)"
+          elif [ -n "$top" ]; then
+            why="the repository git reads is a folder above this tree, not the tree's own"
+          elif ! git rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null; then
+            why="the repository has no commit"
+          fi
+          if [ -n "$why" ]; then
+            echo "secrets: no history to scan: $why, and gitleaks would pass having scanned 0 commits" >&2
+            exit 1
+          fi
+        timeout: 1m
+      - cmd: '{{.TOOL}}/gitleaks.mod gitleaks git --config .gitleaks.toml --no-banner .'
+        timeout: 10m
+
+  secrets-staged:
+    desc: gitleaks over the staged files
+    cmds:
+      - cmd: '{{.TOOL}}/gitleaks.mod gitleaks git --staged --config .gitleaks.toml --no-banner .'
+        timeout: 10m
+
+  vuln:
+    desc: govulncheck over the module
+    cmds:
+      - cmd: '{{.TOOL}}/govulncheck.mod govulncheck ./...'
+        timeout: 10m
+
+  verify:
+    desc: go mod verify, and go mod tidy would change nothing
+    cmds:
+      - cmd: go mod verify
+        timeout: 2m
+      - cmd: go mod tidy -diff
+        timeout: 2m
+
+  # mod is the push tier's vuln and verify: both run where go.mod or go.sum differ from the
+  # commit this branch shares with origin/main, or where git names no such commit, and otherwise
+  # wait for the release tier, which runs both every time. git diff reads
+  # the working tree, so an edit not yet committed counts as a change.
+  mod:
+    desc: vuln and verify, where go.mod or go.sum differ from main's; otherwise the release tier runs them
+    cmds:
+      - cmd: |
+          base=$(git merge-base HEAD origin/main 2>/dev/null) || base=""
+          if [ -n "$base" ] && git diff --quiet "$base" -- go.mod go.sum; then
+            echo "mod: go.mod and go.sum are as at $base, so vuln and verify run in the release tier"
+            exit 0
+          fi
+          {{.TOOL}}/task.mod task vuln verify
+        timeout: 10m
+
+  # One module is taken under the permissive half of a dual licence:
+  # kernel.org/pub/linux/libs/security/libcap/psx, which go-landlock pulls in on Linux. Its licence
+  # file reads "SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0-only", and go-licenses reports the
+  # GPL-2.0 half. go-licenses ignores by string prefix,
+  # so the first command fails on any package under that prefix whose module is not psx itself:
+  # the ignore reaches that one module and no other.
+  licenses:
+    desc: every dependency's licence is one we may ship
+    vars:
+      PSX: kernel.org/pub/linux/libs/security/libcap/psx
+    cmds:
+      - cmd: '{{.GATE}} psx {{.PSX}}'
+        timeout: 2m
+      - cmd: '{{.TOOL}}/go-licenses.mod go-licenses check ./... --allowed_licenses=BSD-2-Clause,BSD-3-Clause,MIT,Apache-2.0,ISC --ignore {{.PSX}}'
+        timeout: 10m
+
+  # notice-check is in the release tier beside licenses: go-licenses checks each
+  # licence and reads no prose, so nothing else compares NOTICE with go.mod, which is how three tags
+  # shipped a module go.mod had dropped. tools/gate runs go list for each system and hands its lines
+  # to measure, which starts no program; a go list that fails fails the task, and one that prints
+  # nothing makes measure refuse.
+  notice-check:
+    desc: fail when NOTICE does not name each module of the non-test build on linux, darwin and windows at the version go.mod resolves, or names a module go.mod does not list
+    cmds:
+      - cmd: '{{.GATE}} notice-check'
+        timeout: 2m
+
+  workflows:
+    desc: actionlint over the workflows, with no shellcheck or pyflakes, so it reads the same on every machine
+    cmds:
+      - cmd: '{{.TOOL}}/actionlint.mod actionlint -shellcheck= -pyflakes='
+        timeout: 10m
+
+  # api holds the exported surface with apidiff, in the push tier as well
+  # as the release tier, where API.txt and its checker were held. It is go-testkit's API gate,
+  # cmd/apigate at the go-testkit go.mod requires, whose doc says what it
+  # holds; go-proc keeps only its api/ files. Only git's own answers that no tag is there let the
+  # breaks pass with nothing to compare, and a shallow clone is red.
+  # Its timeout is 10m: on a cold release runner it builds six export data files beside the race
+  # tests, and 2m was too short there.
+  api:
+    desc: fail unless apidiff finds darwin, linux and windows alike but for api/systems.txt, the breaks since the last tag are api/breaks/<tag>.txt, and go doc finds each name api/marks.txt marks
+    cmds:
+      - cmd: CGO_ENABLED=0 go run github.com/birdtable/go-testkit/cmd/apigate
+        timeout: 10m
+
+  # size runs in the push tier as well as the release tier, so a pull
+  # request past the ceiling fails at its own head, not at the tag.
+  size:
+    desc: print the module's non-test Go lines outside internal/, the runtime packages', testenv's and the total, and fail with the total above the ceiling
+    cmds:
+      - cmd: CGO_ENABLED=0 go run ./internal/cmd/measure size
+        timeout: 2m
+
+  changelog:
+    desc: changie reads its config and the changes folder, and parses every file in .changes/unreleased, so a broken entry fails the gate; an empty unreleased folder passes
+    cmds:
+      - cmd: '{{.TOOL}}/changie.mod changie latest'
+        timeout: 10m
+      # latest reads only the released versions, so an unreleased entry that does not parse passed it. A dry-run
+      # batch parses each one and writes nothing: no file is written and no fragment is deleted. It is run only
+      # when a fragment is there: changie fails on a folder with none, absent or empty, as a cut leaves it.
+      - cmd: 'if ls .changes/unreleased/*.yaml > /dev/null 2>&1; then {{.TOOL}}/changie.mod changie batch patch --dry-run > /dev/null; fi'
+        timeout: 10m
+
+  # Each tier's budget step is gate/budget.sh, its tier and step set here in literal words, as its
+  # comment says why: no start, load or tier rides a Task var, which the caller's environment would
+  # set over the tier's own. pre-commit and release start and end with it, and keep the start per
+  # run, so two runs of one tier each time themselves.
+  pre-commit:
+    desc: the tier a commit runs
+    cmds:
+      - cmd: tier=pre-commit; step=start; . ./gate/budget.sh
+        silent: true
+        timeout: 1m
+      - task: pre-commit-members
+      - cmd: tier=pre-commit; step=end; . ./gate/budget.sh
+        silent: true
+        timeout: 2m
+
+  pre-commit-members:
+    internal: true
+    deps: [fmt, vet, lint, workflows, secrets-staged, example, taskfile]
+
+  # The push tier is one budget step, cpu: hatch budget --cpu runs task pre-push-members
+  # in a tree of its own and judges it by that tree's CPU time. A command line can start only a task
+  # that is not internal, so pre-push-members is public; run alone it is no claim of done. The step's
+  # timeout is above hatch's hang guard, ten times the 10 s wall row, so hatch, not go-task, names a
+  # hang.
+  pre-push:
+    desc: the tier a push runs, and the only claim of done
+    cmds:
+      - cmd: tier=pre-push; step=cpu; . ./gate/budget.sh
+        silent: true
+        timeout: 5m
+
+  pre-push-members:
+    desc: the push tier's members, which its budget step runs under hatch; alone, no claim of done
+    deps: [fmt, vet, lint, layers, workflows, secrets-staged, taskfile, build, api, size, test-short, { task: namespace, vars: { CACHED: "yes" } }, secrets, mod]
+
+  # The release tier takes the push tier's members, with task test, the whole suite, in
+  # place of test-short. It pins CACHED empty, as go-task otherwise reads it from the
+  # environment, so namespace runs with -count=1 -shuffle=on whatever the shell exported.
+  release:
+    desc: the tier a release runs
+    cmds:
+      - cmd: tier=release; step=start; . ./gate/budget.sh
+        silent: true
+        timeout: 1m
+      - task: release-members
+      - cmd: tier=release; step=end; . ./gate/budget.sh
+        silent: true
+        timeout: 2m
+
+  release-members:
+    internal: true
+    deps: [fmt, vet, lint, layers, workflows, secrets-staged, taskfile, build, api, test, { task: namespace, vars: { CACHED: "" } }, secrets, vuln, verify, licenses, notice-check, size, changelog]

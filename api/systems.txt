@@ -1,0 +1,4 @@
+# The exported surface's differences between the systems that task api holds:
+# apidiff's full report from darwin to linux and from darwin to windows, each line led by the system and
+# a tab, as task api prints it on a red. A line here is a name meant to differ by system; the file holds
+# none today. Lines starting with # are not compared.

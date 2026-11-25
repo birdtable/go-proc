@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="t d">
+  <title id="t">go-proc</title>
+  <desc id="d">A process tree, its root in coral. Drawn larger, for small sizes.</desc>
+  <rect width="256" height="256" rx="56" fill="#22264A"/><g transform="translate(128 128) scale(1.75) translate(-178 -148)"><path d="M178 122 L156 172 M178 122 L200 172" fill="none" stroke="#FFF6EC" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="178" cy="118" r="13" fill="#E8735A"/><g fill="#FFF6EC"><circle cx="156" cy="178" r="13"/><circle cx="200" cy="178" r="13"/></g></g>
+</svg>

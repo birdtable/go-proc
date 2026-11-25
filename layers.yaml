@@ -1,0 +1,37 @@
+# Each package of github.com/birdtable/go-proc: its role and its job. What each may import of the module,
+# besides the standard library, and what its tests may import beside that, are its two layers-<path> rules
+# in .golangci.yml, which lint holds every file to; a package not listed here has no rule but
+# layers-no-row, and imports nothing of the module. A package added here takes its two rules there, and its
+# folder in layers-no-row's files, in the same commit.
+module: github.com/birdtable/go-proc
+packages:
+  - path: gitenv
+    role: leaf
+    job: the environment and the arguments that name one folder to a git child
+  - path: gitenv/gittest
+    role: leaf
+    job: the git a test runs, the environment of its child and a repository of its own, for tests only
+  - path: sandbox
+    role: library
+    job: a program run with the network closed, and its files held to folders
+  - path: sandbox/cmd/netblock
+    role: command
+    job: the sandbox as a command a runner starts
+  - path: proc
+    role: leaf
+    job: a child run with a deadline and an output cap in a tree of its own, a process group or a Job Object, and what it printed
+  - path: internal/homevars
+    role: leaf
+    job: the variables each system reads for the person's home, configuration, cache, state and temp folders, proc's list, which a proc test holds equal to testkit's
+  - path: load
+    role: leaf
+    job: the system's load average, read with no program started
+  - path: service
+    role: leaf
+    job: one login service or timer taken, dropped or reported by the system's own tool
+  - path: internal/example/secondconsumer
+    role: example
+    job: go-proc as a second business uses it, through the exported API, with values unlike ours
+  - path: internal/contract
+    role: gate
+    job: api/contract.txt held to its documented format by tests that read the module's test files and the last tag through git, for tests only

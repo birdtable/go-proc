@@ -1,0 +1,2 @@
+- ./gitenv.Without: removed
+- package github.com/birdtable/go-proc/testenv: removed

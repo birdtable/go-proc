@@ -1,0 +1,28 @@
+go-proc
+Copyright 2026 The go-proc Authors
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+The packages gitenv, sandbox and proc were first written in an earlier shared module of the same
+authors, under the same licence, and were moved here unchanged in behaviour.
+
+The library uses these modules, each under its own licence:
+
+- golang.org/x/sys v0.49.0, which the library imports itself: the proc package on every system,
+  the sandbox package for its Linux folder opens, the load package for macOS's load average and
+  the service package for its Windows folder handles. golang.org/x/term and go-landlock require
+  it too: BSD-3-Clause.
+- golang.org/x/term v0.47.0, by which the proc package tells a terminal from a pipe or a file:
+  BSD-3-Clause.
+- github.com/shirou/gopsutil/v4 v4.26.10, by whose load.Avg the load package reads Linux's load
+  average, its load, common and internal/common packages and no other in the build: BSD-3-Clause.
+  The modules go.mod lists beside it for its other systems (ebitengine/purego, go-ole/go-ole,
+  yusufpapurcu/wmi, power-devops/perfstat) are in no build of this library.
+- github.com/landlock-lsm/go-landlock v0.11.2, through which the sandbox package sets its Linux
+  folder rules: MIT.
+- kernel.org/pub/linux/libs/security/libcap/psx v1.2.78, which go-landlock requires on Linux:
+  BSD-3-Clause OR GPL-2.0-only, taken here as BSD-3-Clause, the half its authors offer for
+  permissive use, as Taskfile.yml's licenses task records.
+- github.com/birdtable/go-testkit v0.3.1, of the same authors: the
+  environment the library's tests run in, which the gitenv/gittest package, for tests alone,
+  imports for its Clean. No other package of the library imports it: Apache-2.0.

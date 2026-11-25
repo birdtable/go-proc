@@ -1,0 +1,5 @@
+# The marks of go-proc's exported names. A name this file does not list is
+# experimental: it may change or go at any minor release before v1. A name that is not experimental
+# has one line of three fields split by tabs, its package, its name and its mark (proc, Cmd.Args,
+# stable), and task api refuses a line whose name go doc does not find in the package. The file lists
+# none today. Lines starting with # are not read.

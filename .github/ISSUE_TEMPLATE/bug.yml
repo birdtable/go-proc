@@ -1,0 +1,47 @@
+name: Bug
+description: go-proc does something it should not, or does not do what its documentation says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't report a security problem here: SECURITY.md says how to report one privately. No answer time is promised.
+  - type: input
+    id: version
+    attributes:
+      label: go-proc version
+      description: The version or commit, as `go list -m github.com/birdtable/go-proc` prints it.
+      placeholder: github.com/birdtable/go-proc v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version
+      description: As `go version` prints it.
+      placeholder: go version go1.26.0 linux/amd64
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: The operating system, its version, and the processor.
+      placeholder: Linux 6.12 on amd64
+    validations:
+      required: true
+  - type: textarea
+    id: program
+    attributes:
+      label: The shortest program that shows it
+      description: A whole program, or a test, that someone else can run as it is.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened, and what you expected
+      description: The output or the error, and what you expected in its place.
+    validations:
+      required: true

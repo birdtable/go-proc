@@ -1,0 +1,17 @@
+== git status --porcelain=v2 -z
+1 .M N... 100644 100644 100644 c54279fec078804a74c7f1fa1953d6a009a53962 c54279fec078804a74c7f1fa1953d6a009a53962 README
+? new.txt
+== git ls-files -s -z
+100644 c54279fec078804a74c7f1fa1953d6a009a53962 0	README
+100644 4e349b596c5c9d38a82829fafbaf52281c21e319 0	crlf.txt
+120000 100b93820ade4c16225673b4ca62bb3ade63c313 0	link
+100644 9990e6714ad88e511f71ffeaba01803b45cbdfb5 0	naïve.txt
+100755 deead1da44bdf28388b43d8fe68a100eba7afbdb 0	run.sh
+== git diff --raw --no-abbrev -z
+:100644 100644 c54279fec078804a74c7f1fa1953d6a009a53962 0000000000000000000000000000000000000000 M
+README
+== git log --format=%H %T%n%an <%ae> %ad%n%cn <%ce> %cd%n%s --date=raw
+631e28d2f24bfebb4feeedac0e1cc3d67d81fa49 0bd0125c1db1b0908d0d60cdf4faf270275fb3d7
+testenv <testenv@example.invalid> 1700000000 +0000
+testenv <testenv@example.invalid> 1700000000 +0000
+a tree
