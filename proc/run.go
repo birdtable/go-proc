@@ -1184,7 +1184,11 @@ var (
 // written, cleaned, and with case folded on every system one letter to one letter, as
 // strings.EqualFold folds it; no link is followed. A file system may hold more spellings as one
 // folder than that, among them two Unicode normalization forms, and ß and SS on macOS, and those
-// are not compared as one, so the caller passes both folders in one spelling. It does not judge the
+// are not compared as one, so the caller passes both folders in one spelling. A caller that takes
+// either folder from elsewhere resolves both the same way first, for instance through
+// filepath.EvalSymlinks, or compares them on disk with os.SameFile: on macOS the system temp folder
+// lies beneath /var, a link to /private/var. The child is given the cleaned path, so a .. after a
+// link names another folder than the one the caller judged. It does not judge the
 // cache folder's owner, mode or links, or whether it is there: that is the caller's part, as a kept
 // cache is a path from one run into the next. It makes no folder, as HomeEnv makes none.
 func HomeEnvCache(root, cache string) ([]string, error) {
