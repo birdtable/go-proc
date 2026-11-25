@@ -1,14 +1,24 @@
-# Runs go vet and go test on GitHub's hosted runners, on Linux, macOS and Windows, for every pull
-# request, every push to main, and by hand. It holds no secret, and its token reads the repository's
-# contents alone. Every module is fetched through the public Go module proxy, as a program that
-# imports go-proc fetches them, and nothing is kept in the Actions cache.
+# Runs go vet and go test on GitHub's hosted runners: on Linux and Windows for every pull request,
+# and on Linux, macOS and Windows for every push to main, every tag and by hand. It holds no secret,
+# and its token reads the repository's contents alone. Every module is fetched through the public Go
+# module proxy, as a program that imports go-proc fetches them, and nothing is kept in the Actions
+# cache.
 name: test
 
 on:
   pull_request:
   push:
     branches: [main]
+    # A release's proof is all three jobs at the tagged commit. This repo tags only its root module,
+    # as v<major>.<minor>.<patch>.
+    tags: ['v*']
   workflow_dispatch:
+
+# A newer push to the same branch, pull request or tag cancels the run it supersedes, so that run's
+# runners go back to the pool.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -18,7 +28,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # The organisation's hosted macOS runners are a small pool shared by all its repositories, and
+        # a macOS job has waited out its whole timeout for one. So a pull request runs Linux and
+        # Windows only, and macOS runs where it is the proof: on main, on a tag and by hand.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     # No GOFLAGS or GOPROXY: go's defaults, -mod=readonly and the public proxy, so a go.mod or go.sum
