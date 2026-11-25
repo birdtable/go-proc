@@ -62,24 +62,30 @@ func TestAProgramThatCannotBeReadForItsLoadFoldersIsRefusedBeforeAnythingIsSet(t
 
 // TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer: this system's true, a
 // program that names a loader, starts behind RunHolding and exits 0 when the caller names its own
-// folder alone, and false beside it exits 1, so the program is what ran. The plant: by RunHolding's
-// own steps with nothing left out it exits 0 again, and with any one folder RunHolding added left
-// out it does not start.
+// folder alone, and false beside it exits 1, so the program is what ran. Each is the file its links
+// resolve to, and the folder named is that file's: a /usr/bin/false that links to a multicall
+// program in another folder, as Ubuntu 26.04's links to Rust's coreutils, is held to that folder.
+// The plant: by RunHolding's own steps with nothing left out it exits 0 again, and with any one
+// folder RunHolding added left out it does not start.
 //
 // What it costs when this fails: the folders RunHolding adds are not the ones this system's loader
 // reads, so a held program does not start, or one of them is a grant the program never needed.
 func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *testing.T) {
 	t.Parallel()
-	bin, err := filepath.EvalSymlinks("/bin")
-	if err != nil {
-		t.Fatal(err)
+	resolved := func(name string) string {
+		t.Helper()
+		p, err := filepath.EvalSymlinks(filepath.Join("/bin", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
 	}
-	prog := filepath.Join(bin, "true")
+	prog, falseProg := resolved("true"), resolved("false")
 	dirs, err := loadHere(prog)
 	if err != nil {
 		t.Fatalf("the load folders of %s: %v", prog, err)
 	}
-	added := named{readOnly: []string{bin}}.with(dirs).readOnly[1:]
+	added := named{readOnly: []string{filepath.Dir(prog)}}.with(dirs).readOnly[1:]
 	if len(added) == 0 {
 		t.Fatalf("%s loads from %q, none outside its own folder, so this system has no row", prog, dirs)
 	}
@@ -88,9 +94,9 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 		prog  string
 		leave []string
 		want  int
-	}{{prog, nil, 0}, {filepath.Join(bin, "false"), nil, 1}, {prog, []string{"-"}, 0}} {
+	}{{prog, nil, 0}, {falseProg, nil, 1}, {prog, []string{"-"}, 0}} {
 		if code, said := behindTheBlock(t, r.prog, r.leave...); code != r.want {
-			t.Errorf("%s behind the block with %s alone named, leaving out %q: exit %d, want %d: %s", r.prog, bin, r.leave, code, r.want, strings.TrimSpace(said))
+			t.Errorf("%s behind the block with %s alone named, leaving out %q: exit %d, want %d: %s", r.prog, filepath.Dir(r.prog), r.leave, code, r.want, strings.TrimSpace(said))
 		}
 	}
 	for _, d := range added {
