@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -88,7 +89,7 @@ func TestHomeEnvCacheRefusesAFolderThatIsNoKeptCacheApartFromRoot(t *testing.T) 
 		if errors.Is(tc.want, errHomeCacheRoot) {
 			named = tc.root
 		}
-		if !strings.Contains(err.Error(), `"`+named+`"`) {
+		if !strings.Contains(err.Error(), strconv.Quote(named)) {
 			t.Errorf("%s: the error %q does not name %q", tc.name, err, named)
 		}
 	}
