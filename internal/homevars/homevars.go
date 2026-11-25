@@ -23,6 +23,12 @@ func Folders(goos string) []string {
 	return names
 }
 
+// Cache is the one name of Folders that names a cache folder and nothing else, on every system:
+// XDG_CACHE_HOME, the XDG Base Directory spec's cache-only folder. No other name of Folders names
+// a cache alone: LOCALAPPDATA, os.UserCacheDir on Windows, holds programs' local data and settings
+// too, and macOS's cache folder, $HOME/Library/Caches, has no variable.
+const Cache = "XDG_CACHE_HOME"
+
 // Halves is each variable a program on goos reads that names USERPROFILE's folder in two parts,
 // none on any system but windows: HOMEDRIVE, its volume, and HOMEPATH, the rest.
 func Halves(goos string) []string {

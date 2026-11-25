@@ -82,7 +82,8 @@ path. When the run is ended early, the error is a `proc.Ended` that says why: `d
 ## What's inside
 
 - [`proc`](https://pkg.go.dev/github.com/birdtable/go-proc/proc): run a program with a deadline,
-  an output cap and a bare environment, in a process tree killed whole when it ends.
+  an output cap and a bare environment, in a process tree killed whole when it ends. A child can
+  get a fresh home of its own, and keep its cache folder between runs while the rest is fresh.
 - [`sandbox`](https://pkg.go.dev/github.com/birdtable/go-proc/sandbox): run a program with the
   network closed and its files held to a few folders, or from the command line with
   `sandbox/cmd/netblock`.
