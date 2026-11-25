@@ -1181,11 +1181,12 @@ var (
 //
 // It refuses, with an error that wraps ErrHomeCache and gives no list, an empty or relative root or
 // cache, a cache that is root or beneath it, and a cache that holds root. Folders are compared as
-// written, cleaned and with case folded on every system, and no link is followed. Two spellings of
-// a folder in different Unicode normalization forms are not compared as one, so the caller passes
-// both folders in one form. It does not judge
-// the cache folder's owner, mode or links, or whether it is there: that is the caller's part, as a
-// kept cache is a path from one run into the next. It makes no folder, as HomeEnv makes none.
+// written, cleaned, and with case folded on every system one letter to one letter, as
+// strings.EqualFold folds it; no link is followed. A file system may hold more spellings as one
+// folder than that, among them two Unicode normalization forms, and ß and SS on macOS, and those
+// are not compared as one, so the caller passes both folders in one spelling. It does not judge the
+// cache folder's owner, mode or links, or whether it is there: that is the caller's part, as a kept
+// cache is a path from one run into the next. It makes no folder, as HomeEnv makes none.
 func HomeEnvCache(root, cache string) ([]string, error) {
 	if root == "" || !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("%w: %q", errHomeCacheRoot, root)
