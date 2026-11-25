@@ -15,7 +15,9 @@ import (
 // the boot, in the pid namespace and in the time namespace that gave it, which it carries: a pid and
 // a start time in ticks since boot name a process within those alone, so an id kept across a
 // reboot, handed to another pid namespace, or read in another time namespace is ErrStale, and
-// nothing is signalled.
+// nothing is signalled. On Windows an id is good only in the session that gave it, whose namespace
+// holds the job's name: read in another session (a service, a task that runs while its user is
+// logged off, an ssh login) it is ErrStale while the tree runs on, and nothing is signalled.
 type TreeID string
 
 // Detached is a program to start detached: in a tree of its own, out of this process's session,
@@ -50,8 +52,10 @@ type Tree struct {
 
 // ErrStale is a Stop or an Interrupt of a tree whose leader is gone, or was reaped: nothing was
 // signalled, since the id may name a process that took the leader's pid. On Windows a process of
-// the tree that duplicates the job's handle, marks it inheritable or opens the job by name keeps
-// the id live past the leader's reap, so a Stop ends what is left of that tree and returns nil.
+// the caller's user, in the tree or not, that duplicates the job's handle, marks it inheritable or
+// opens the job by name keeps the id live past the leader's reap, so a Stop ends what is left of
+// that tree and returns nil. On Windows an id read in another session than the one that gave it
+// is ErrStale too, while its tree runs on (TreeID).
 var ErrStale = errors.New("proc: the tree id names no live tree, since its leader is gone or reaped, and nothing was signalled")
 
 // errStale is what each gate returns for ErrStale: the value ErrStale was given here, so a value a
@@ -178,7 +182,9 @@ func start(d Detached, proc procFS) (tree Tree, err error) {
 //
 // An id is a name, not a capability: on Unix anyone may build one for a session leader from its pid
 // and start time, which the system shows, so holding one proves nothing. What holds is the kill's own
-// permission check, which an id does not widen.
+// permission check, which an id does not widen. On Windows an id is a job's name, which any process
+// of the caller's user in its session may read from the session's object directory, so holding one
+// proves nothing there either. What holds is the job's own access check, which an id does not widen.
 func Stop(id TreeID) error {
 	return stop(id, procFS{dir: procMount}, ender())
 }

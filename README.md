@@ -132,7 +132,8 @@ say exactly what each bound holds.
 
 Linux, macOS and Windows, on amd64 and arm64, are built and vetted on every change. The tests run
 on macOS (arm64), Linux (amd64) and Windows (amd64); arm64 on Linux and Windows is built and
-vetted, not tested. On Windows (amd64), the full release checks of v0.15.0 passed for every package.
+vetted, not tested. The release checks of v0.16.0 ran on all three, macOS (arm64), Linux (amd64)
+and Windows (amd64), for every package.
 
 Where a system can't hold what you ask, go-proc refuses with an error, before anything starts, and
 never quietly gives you less. What each system refuses, by name:
@@ -141,7 +142,7 @@ never quietly gives you less. What each system refuses, by name:
 |---|---|---|---|---|
 | Linux | `Limits.Processes`; `Limits.TreeMemory` where no cgroup is delegated to it; `Limits.Contained` to a root caller, without `nsdelegate`, or where its shim can't take a step; `Usage`, `Pids` and `JoinTree` | a kernel older than 6.12, a processor other than amd64 or arm64, or Landlock turned off or without its erratum 2 | nothing | a `/proc/loadavg` of fewer than three fields, or one it can't read when `sysinfo(2)` fails too |
 | macOS | `Limits.TreeMemory`, `Limits.Processes` and `Limits.Contained`; `Cmd.File`; `Usage`, `Pids` and `JoinTree` | a `sandbox-exec` that cannot start or set its profile | nothing | an unreadable `vm.loadavg` |
-| Windows | `Limits.Contained`; `Cmd.File`; `ChildrenCPU`; `Interrupt` of a live tree; a `Grace` without `Terminal` and a console; a zero `Drain`; a `Path` with a drive and no root, or a root and no drive; a file that is not an `.exe` or `.com` | every run | a task that holds a `%` | every read |
+| Windows | `Limits.Contained`; `Cmd.File`; `ChildrenCPU`; `Interrupt` of a live tree; a `Grace` without `Terminal` and a console; a `Path` with a drive and no root, or a root and no drive; a file that is not an `.exe` or `.com` | every run | a task that holds a `%` | every read |
 | FreeBSD and other Unix | as macOS, and `Start`, `Stop` and `Interrupt` | every run | every call | every read |
 
 A refused `Run` wraps `ErrRefused`, and a call this system has no way to make wraps

@@ -7,10 +7,10 @@
 // Windows a process a system service starts on a child's behalf (WMI, Task Scheduler) is not in the
 // tree. A process of the tree may duplicate the job's handle from the caller; held open, it keeps
 // the job and itself alive past the caller, and by it the process may allow breakaway, clear
-// kill-on-close or lift the job's limits. A process of a Start tree that duplicates the job's
-// handle, marks it inheritable or opens the job by name keeps the tree's id live past the leader's
-// reap: a Stop then ends what is left of that tree and returns nil, not ErrStale. Only that tree's
-// own job opens, as its name is random.
+// kill-on-close or lift the job's limits. A process of the caller's user, in a Start tree or not,
+// that duplicates the tree's job handle, marks it inheritable or opens the job by name keeps the
+// tree's id live past the leader's reap: a Stop then ends what is left of that tree and returns
+// nil, not ErrStale. Only that tree's own job opens, as its name is random.
 package proc
 
 import (
