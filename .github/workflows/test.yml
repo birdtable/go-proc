@@ -21,9 +21,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      GOFLAGS: -mod=mod
-      GOPROXY: https://proxy.golang.org,direct
+    # No GOFLAGS or GOPROXY: go's defaults, -mod=readonly and the public proxy, so a go.mod or go.sum
+    # that needs tidying is refused here rather than quietly changed on the runner.
     defaults:
       run:
         shell: bash
