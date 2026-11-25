@@ -1211,10 +1211,14 @@ func HomeEnvCache(root, cache string) ([]string, error) {
 
 // beneath is whether the clean, absolute path is dir or a folder beneath it, as written, with case
 // folded. It walks up path a folder at a time, so each compare is of whole names, never of a slice
-// cut by byte count, as a case pair can differ in length (U+212A KELVIN SIGN and k).
+// cut by byte count, as a case pair can differ in length (U+212A KELVIN SIGN and k). One trailing
+// separator is dropped from each side before each compare: Clean leaves a share or device volume
+// written without one (\\srv\share), and Dir gives it back with one (\\srv\share\).
 func beneath(path, dir string) bool {
+	sep := string(filepath.Separator)
+	dir = strings.TrimSuffix(dir, sep)
 	for p := path; ; {
-		if strings.EqualFold(p, dir) {
+		if strings.EqualFold(strings.TrimSuffix(p, sep), dir) {
 			return true
 		}
 		up := filepath.Dir(p)

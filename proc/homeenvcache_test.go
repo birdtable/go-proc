@@ -65,10 +65,11 @@ func TestHomeEnvCacheRefusesAFolderThatIsNoKeptCacheApartFromRoot(t *testing.T) 
 	// kroot's k folds with U+212A KELVIN SIGN, three bytes in UTF-8 to k's one.
 	kroot := filepath.Join(tmp, "kroot")
 	sep := string(filepath.Separator)
-	for _, tc := range []struct {
+	type refusal struct {
 		name, root, cache string
 		want              error
-	}{
+	}
+	rows := []refusal{
 		{"an empty root", "", filepath.Join(tmp, "cache"), errHomeCacheRoot},
 		{"a relative root", "home", filepath.Join(tmp, "cache"), errHomeCacheRoot},
 		{"an empty cache", root, "", errHomeCacheCache},
@@ -78,11 +79,20 @@ func TestHomeEnvCacheRefusesAFolderThatIsNoKeptCacheApartFromRoot(t *testing.T) 
 		{"a cache beneath root", root, filepath.Join(root, "cache"), errHomeCacheWithin},
 		{"a cache beneath root by a .. that stays in it", root, root + sep + "a" + sep + ".." + sep + "cache", errHomeCacheWithin},
 		{"a cache beneath root in another case", root, filepath.Join(strings.ToUpper(root), "cache"), errHomeCacheWithin},
-		{"a cache beneath root spelled with a case pair of another length", kroot, filepath.Join(tmp, "Kroot", "cache"), errHomeCacheWithin},
+		{"a cache beneath root spelled with a case pair of another length", kroot, filepath.Join(tmp, "\u212Aroot", "cache"), errHomeCacheWithin},
 		{"a cache that holds root", root, tmp, errHomeCacheHolds},
 		{"a cache that is the volume's root", root, filepath.VolumeName(root) + sep, errHomeCacheHolds},
 		{"a cache that holds root in another case", root, strings.ToUpper(tmp), errHomeCacheHolds},
-	} {
+	}
+	if homevars.Here == "windows" {
+		// Clean leaves a share volume written without its separator as it is, and Dir gives it back
+		// with one: neither folder need be there, as nothing reads the disk.
+		rows = append(rows,
+			refusal{"a cache that is the share holding root", `\\srv\share\home`, `\\srv\share`, errHomeCacheHolds},
+			refusal{"a cache beneath a root that is the share", `\\srv\share`, `\\srv\share\cache`, errHomeCacheWithin},
+		)
+	}
+	for _, tc := range rows {
 		env, err := HomeEnvCache(tc.root, tc.cache)
 		if !errors.Is(err, tc.want) || !errors.Is(err, ErrHomeCache) || env != nil {
 			t.Errorf("%s: HomeEnvCache(%q, %q) = %q, %v; want no list and %v", tc.name, tc.root, tc.cache, env, err, tc.want)
