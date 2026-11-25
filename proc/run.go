@@ -1181,7 +1181,9 @@ var (
 //
 // It refuses, with an error that wraps ErrHomeCache and gives no list, an empty or relative root or
 // cache, a cache that is root or beneath it, and a cache that holds root. Folders are compared as
-// written, cleaned and with case folded on every system, and no link is followed. It does not judge
+// written, cleaned and with case folded on every system, and no link is followed. Two spellings of
+// a folder in different Unicode normalization forms are not compared as one, so the caller passes
+// both folders in one form. It does not judge
 // the cache folder's owner, mode or links, or whether it is there: that is the caller's part, as a
 // kept cache is a path from one run into the next. It makes no folder, as HomeEnv makes none.
 func HomeEnvCache(root, cache string) ([]string, error) {
@@ -1208,13 +1210,17 @@ func HomeEnvCache(root, cache string) ([]string, error) {
 }
 
 // beneath is whether the clean, absolute path is dir or a folder beneath it, as written, with case
-// folded.
+// folded. It walks up path a folder at a time, so each compare is of whole names, never of a slice
+// cut by byte count, as a case pair can differ in length (U+212A KELVIN SIGN and k).
 func beneath(path, dir string) bool {
-	if strings.EqualFold(path, dir) {
-		return true
+	for p := path; ; {
+		if strings.EqualFold(p, dir) {
+			return true
+		}
+		up := filepath.Dir(p)
+		if up == p {
+			return false
+		}
+		p = up
 	}
-	if !strings.HasSuffix(dir, string(filepath.Separator)) {
-		dir += string(filepath.Separator)
-	}
-	return len(path) > len(dir) && strings.EqualFold(path[:len(dir)], dir)
 }

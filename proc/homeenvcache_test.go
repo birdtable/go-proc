@@ -62,6 +62,8 @@ func TestHomeEnvCacheRefusesAFolderThatIsNoKeptCacheApartFromRoot(t *testing.T) 
 	t.Parallel()
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, "home")
+	// kroot's k folds with U+212A KELVIN SIGN, three bytes in UTF-8 to k's one.
+	kroot := filepath.Join(tmp, "kroot")
 	sep := string(filepath.Separator)
 	for _, tc := range []struct {
 		name, root, cache string
@@ -76,6 +78,7 @@ func TestHomeEnvCacheRefusesAFolderThatIsNoKeptCacheApartFromRoot(t *testing.T) 
 		{"a cache beneath root", root, filepath.Join(root, "cache"), errHomeCacheWithin},
 		{"a cache beneath root by a .. that stays in it", root, root + sep + "a" + sep + ".." + sep + "cache", errHomeCacheWithin},
 		{"a cache beneath root in another case", root, filepath.Join(strings.ToUpper(root), "cache"), errHomeCacheWithin},
+		{"a cache beneath root spelled with a case pair of another length", kroot, filepath.Join(tmp, "Kroot", "cache"), errHomeCacheWithin},
 		{"a cache that holds root", root, tmp, errHomeCacheHolds},
 		{"a cache that is the volume's root", root, filepath.VolumeName(root) + sep, errHomeCacheHolds},
 		{"a cache that holds root in another case", root, strings.ToUpper(tmp), errHomeCacheHolds},
