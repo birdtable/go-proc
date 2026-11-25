@@ -44,6 +44,13 @@ jobs:
       - name: allow unprivileged user namespaces
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # For one run: where this runner's true and false resolve, for sandbox's load test.
+      - name: show where true and false resolve
+        if: runner.os == 'Linux'
+        run: |
+          readlink -f /bin /usr/bin/true /usr/bin/false
+          ls -l /usr/bin/true /usr/bin/false
+          ldd "$(readlink -f /usr/bin/true)" || true
       - name: go vet
         run: go vet ./...
       # go test runs as the release tier runs it, with the race detector, in shuffled order and never
