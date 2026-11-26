@@ -3,6 +3,7 @@ package sandbox
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -222,10 +223,13 @@ func TestAProgramsOwnLibrariesNeverVouchForItsFolder(t *testing.T) {
 
 // TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt: a #! script's interpreter is the
 // path after #! and any spaces and tabs, up to a space or tab, on a line that ends at a newline or
-// a #, as the macOS kernel reads it. A Mach-O or universal file, in either byte order, needs none,
-// and any other file with no #! is run by /bin/sh, as execvp runs a file the kernel refuses with
-// ENOEXEC. A #! line with no end in the first 512 bytes, an empty one, and a relative interpreter
-// are errors.
+// a #, as the macOS kernel reads it. A Mach-O program of 64 or 32 bits whose filetype is
+// MH_EXECUTE, a Mach-O file in the other byte order and a universal file need none, and any other
+// file with no #! is run by /bin/sh, as execvp runs a file the kernel refuses with ENOEXEC: a
+// Mach-O library or object among them, and a Mach-O magic with nothing after it, as the kernel
+// reads a short file padded with zeros, so 14 bytes ending in MH_EXECUTE's low byte are a program.
+// A #! line with no end in the first 512 bytes, an empty one, and a relative interpreter are
+// errors.
 //
 // What it costs when this fails: RunHolding holds a file other than the one the kernel runs as the
 // interpreter, and a script runs one outside the folders, or fails late with exit 71.
@@ -239,8 +243,13 @@ func TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt(t *testing.T) {
 		{"#!/held/run\targ\n", "/held/run", ""},
 		{"#!/held/true#/x\n", "/held/true", ""},
 		{"#!/held/run #" + strings.Repeat("x", 600), "/held/run", ""},
-		{"\xcf\xfa\xed\xfe a 64-bit Mach-O file", "", ""},
-		{"\xce\xfa\xed\xfe a 32-bit Mach-O file", "", ""},
+		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00\x00\x00 a 64-bit Mach-O program", "", ""},
+		{"\xce\xfa\xed\xfe\x07\x00\x00\x00\x03\x00\x00\x00\x02\x00\x00\x00 a 32-bit Mach-O program", "", ""},
+		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00", "", ""},
+		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x06\x00\x00\x00 a 64-bit Mach-O library", "/bin/sh", ""},
+		{"\xce\xfa\xed\xfe\x07\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00 a 32-bit Mach-O object", "/bin/sh", ""},
+		{"\xcf\xfa\xed\xfe a 64-bit Mach-O magic and text", "/bin/sh", ""},
+		{"\xcf\xfa\xed\xfe", "/bin/sh", ""},
 		{"\xfe\xed\xfa\xcf a Mach-O file in the other byte order", "", ""},
 		{"\xca\xfe\xba\xbe a universal file", "", ""},
 		{"exit 0\n", "/bin/sh", ""},
@@ -259,6 +268,43 @@ func TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt(t *testing.T) {
 			t.Errorf("%q: %q, %v; want %q", r.head, got, err, r.interp)
 		case r.says != "" && (err == nil || !strings.Contains(err.Error(), r.says)):
 			t.Errorf("%q: %q, %v; want an error saying %q", r.head, got, err, r.says)
+		}
+	}
+}
+
+// universalLimit is the line of docs/sandbox.md that names, among what the block does not close,
+// the universal file whose slices RunHolding does not read.
+const universalLimit = "On macOS a universal file is taken for a program by its header, and its slices are not read."
+
+// namesTheUniversalLimit is whether doc names universalLimit below its "What the block does not
+// close" heading, read with each line's breaks and indent as one space.
+func namesTheUniversalLimit(doc []byte) bool {
+	_, limits, ok := strings.Cut(string(doc), "\n## What the block does not close\n")
+	return ok && strings.Contains(strings.Join(strings.Fields(limits), " "), universalLimit)
+}
+
+// TestTheSandboxDocNamesTheUniversalFileWhoseSlicesAreNotRead: docs/sandbox.md names, among what
+// the block does not close, that a universal file is taken for a program by its header, which
+// TestOnMacOSAFileTheKernelRefusesWithENOEXECIsHeldToTheShell holds as it is. The control: the doc
+// with the line above the heading, or with no heading, is found not to name it.
+//
+// What it costs when this fails: a caller reads that every file the kernel refuses with ENOEXEC
+// is refused up front, and a universal library fails after the exec with exit 71.
+func TestTheSandboxDocNamesTheUniversalFileWhoseSlicesAreNotRead(t *testing.T) {
+	t.Parallel()
+	doc, err := os.ReadFile("../docs/sandbox.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !namesTheUniversalLimit(doc) {
+		t.Errorf("docs/sandbox.md does not name %q below its \"What the block does not close\" heading", universalLimit)
+	}
+	for _, planted := range []string{
+		universalLimit + "\n\n## What the block does not close\n\n  - Nothing.\n",
+		"## What the block opens\n\n  - " + universalLimit + "\n",
+	} {
+		if namesTheUniversalLimit([]byte("# sandbox\n\n" + planted)) {
+			t.Errorf("a doc with only %q is found to name the limit", planted)
 		}
 	}
 }

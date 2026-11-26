@@ -32,12 +32,16 @@ outside them, a shell's command among them, and a link on the path swapped after
 closed, with the system sandbox's exit 71. There RunHolding reads a #! script's first line, with no
 lookup, as the kernel reads it, to the first newline or #, and refuses a script whose interpreter
 is outside the folders; a program env finds is held when env runs it. A file that may run with
-neither #! nor a program's format, which the kernel refuses and execvp runs with /bin/sh, is
-refused the same way unless /bin is named. With /bin named, such a file and a #!/bin/sh script
-run, but behind the block /bin/sh cannot read /private/var/select/sh, the link that picks the
-shell it runs: it writes that error to the program's standard error and runs its default shell. A
-file with no execute bit, which the kernel refuses before any shell or interpreter, is refused
-whatever its first line.
+neither #! nor a program's format, which the kernel refuses with ENOEXEC and execvp runs with
+/bin/sh, is refused the same way unless /bin is named: a Mach-O file whose filetype is not
+MH_EXECUTE, a library or an object, among them, and a #! script whose interpreter is no Mach-O
+program, a script itself or a plain file, as the kernel starts no other interpreter for a script.
+With /bin named, such a file and a #!/bin/sh script run, but behind the block /bin/sh cannot read
+/private/var/select/sh, the link that picks the shell it runs: it writes that error to the
+program's standard error and runs its default shell. A file the caller may not run, as access(2)
+with X_OK asks the kernel, which refuses it before any shell or interpreter, is refused whatever
+its first line: a file of mode 0601 that the caller owns among them, as the owner's bits decide
+for the owner.
 
 ## What the block does not close
 
@@ -61,6 +65,13 @@ whatever its first line.
     real path, since a link on the way to it outside the folders (/var, /tmp and /etc are links)
     cannot be followed, and RunHolding refuses it with ErrUsage; a library outside dyld's shared
     cache, and the folder of each program it starts, /bin for a shell, are the caller's to name.
+  - On macOS a universal file is taken for a program by its header, and its slices are not read.
+    The kernel runs the slice it grades best for the Mac, and one that is not MH_EXECUTE it
+    refuses with ENOEXEC, which execvp runs with /bin/sh, so a universal library passes Check and
+    fails after the exec with exit 71 while /bin is not named. Telling the slice is grading the
+    CPU types as the kernel does, and refusing every universal file would turn away the programs
+    that run. Nor is a script's interpreter that the caller may not read told apart: it is held
+    as named, and the kernel, which needs no read to run it, may still refuse it, closed.
   - The block takes no user namespace and no mount namespace, so a program sees every file's real
     owner, and it scrubs no *_SOCK or *_HOST variable from the environment: a variable only names a
     socket, which the block refuses.

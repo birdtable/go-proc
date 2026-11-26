@@ -53,7 +53,7 @@ func TestSizeCountsTheNonTestLinesAndRefusesAboveTheCeiling(t *testing.T) {
 	if code := run([]string{"size"}, dir, nil, &out); code != 0 {
 		t.Errorf("size exited %d at the ceiling, and want 0: %s", code, &out)
 	}
-	if want := "runtime packages (all but testenv): 11903\ntestenv: 0\nnon-test Go lines outside internal/: 11903 (the ceiling is 11903)\n"; out.String() != want {
+	if want := "runtime packages (all but testenv): 11948\ntestenv: 0\nnon-test Go lines outside internal/: 11948 (the ceiling is 11948)\n"; out.String() != want {
 		t.Errorf("size said %q, and want %q", &out, want)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "a", "a.go"), []byte(lines(1001)), 0o600); err != nil {
@@ -61,9 +61,9 @@ func TestSizeCountsTheNonTestLinesAndRefusesAboveTheCeiling(t *testing.T) {
 	}
 	out.Reset()
 	if code := run([]string{"size"}, dir, nil, &out); code != 1 {
-		t.Errorf("size exited %d at 11,904 lines, and want 1: %s", code, &out)
+		t.Errorf("size exited %d at 11,949 lines, and want 1: %s", code, &out)
 	}
-	if want := "11904 lines is 1 above the ceiling"; !strings.Contains(out.String(), want) {
+	if want := "11949 lines is 1 above the ceiling"; !strings.Contains(out.String(), want) {
 		t.Errorf("size did not say %q:\n%s", want, &out)
 	}
 }

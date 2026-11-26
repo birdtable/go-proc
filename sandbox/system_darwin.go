@@ -2,7 +2,11 @@
 
 package sandbox
 
-import "os"
+import (
+	"os"
+
+	"golang.org/x/sys/unix"
+)
 
 // runHere is Run on macOS: the streams checked, then the system sandbox,
 // with the files held to n.
@@ -31,3 +35,9 @@ func loadHere(string, string) ([]string, error) { return nil, nil }
 func programHere() programRule {
 	return programRule{walks: true, maxLinks: 32, linksHeld: true, interpreters: true}
 }
+
+// mayRunHere is nil when this caller may run the file, as access(2) with X_OK asks the macOS
+// kernel, which refuses the exec with EACCES before any interpreter reads the file: the program
+// runs as the caller, whose own execute bit decides, or its group's, or the others', never the
+// three bits together.
+func mayRunHere(file string) error { return unix.Access(file, unix.X_OK) }

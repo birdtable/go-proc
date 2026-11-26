@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -101,7 +102,9 @@ func TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders(t *testing.T) {
 // with /bin/sh, is ErrUsage from RunHolding and Check, naming /bin/sh, before anything is set,
 // unless /bin is held too: then Check passes it and RunHolding runs it, exit 0. The same file with
 // no execute bit, mode 0600, which the kernel refuses with EACCES before any shell, is ErrUsage
-// saying it may not run, with /bin held and without, and so is a #!/bin/sh script of mode 0600.
+// saying it may not run, with /bin held and without, and so is a #!/bin/sh script of mode 0600,
+// and one of mode 0601 or 0610 that the caller owns, whose execute bit is not the caller's: the
+// kernel reads the owner's bits for the owner, as access(2) asks it.
 //
 // What it costs when this fails: the file fails after the exec with the system sandbox's exit 71,
 // which a program could give too, in place of ErrUsage saying which folder it needs, or the
@@ -129,13 +132,25 @@ func TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt(t *testing.T) {
 	}
 
 	locked, lockedScript := filepath.Join(held, "locked"), filepath.Join(held, "lockedscript")
-	for p, body := range map[string]string{locked: "exit 0\n", lockedScript: "#!/bin/sh\nexit 0\n"} {
-		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+	othersOnly, groupOnly := filepath.Join(held, "othersonly"), filepath.Join(held, "grouponly")
+	for _, f := range []struct {
+		path, body string
+		mode       os.FileMode
+	}{
+		{locked, "exit 0\n", 0o600},
+		{lockedScript, "#!/bin/sh\nexit 0\n", 0o600},
+		{othersOnly, "#!/bin/sh\nexit 0\n", 0o601},
+		{groupOnly, "#!/bin/sh\nexit 0\n", 0o610},
+	} {
+		if err := os.WriteFile(f.path, []byte(f.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(f.path, f.mode); err != nil {
 			t.Fatal(err)
 		}
 	}
 	mayNot := func(prog string) string {
-		return `the program "` + prog + `" may not run: its real file "` + prog + `" has no execute bit`
+		return `the program "` + prog + `" may not run: access(2) says this caller may not run its real file "` + prog + `"`
 	}
 	for _, r := range []struct {
 		claim, prog string
@@ -145,6 +160,8 @@ func TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt(t *testing.T) {
 		{"a file with no #! and no execute bit, /bin held", locked, []string{held, "/bin"}},
 		{"a #!/bin/sh script with no execute bit, /bin not held", lockedScript, []string{held}},
 		{"a #!/bin/sh script with no execute bit, /bin held", lockedScript, []string{held, "/bin"}},
+		{"a #!/bin/sh script of mode 0601 the caller owns, /bin held", othersOnly, []string{held, "/bin"}},
+		{"a #!/bin/sh script of mode 0610 the caller owns, /bin held", groupOnly, []string{held, "/bin"}},
 	} {
 		if _, err := Check(Folders{ReadOnly: r.folders}, r.prog); !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || !strings.Contains(err.Error(), mayNot(r.prog)) {
 			t.Errorf("Check of %s: %v, want ErrUsage, never ErrNoBlock, and %q", r.claim, err, mayNot(r.prog))
@@ -155,6 +172,85 @@ func TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt(t *testing.T) {
 	}
 	if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", locked, nil); code != childUsage || !strings.Contains(said, mayNot(locked)) {
 		t.Errorf("RunHolding of a file with no #! and no execute bit, /bin held: exit %d, said %q; want exit %d and %q", code, said, childUsage, mayNot(locked))
+	}
+	if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", othersOnly, nil); code != childUsage || !strings.Contains(said, mayNot(othersOnly)) {
+		t.Errorf("RunHolding of a script of mode 0601 the caller owns, /bin held: exit %d, said %q; want exit %d and %q", code, said, childUsage, mayNot(othersOnly))
+	}
+}
+
+// TestOnMacOSAFileTheKernelRefusesWithENOEXECIsHeldToTheShell: two more files the kernel refuses
+// with ENOEXEC, which execvp then runs with /bin/sh, are ErrUsage from RunHolding and Check, naming
+// /bin/sh, before anything is set, unless /bin is held too: a Mach-O file in the Mac's byte order
+// whose filetype is a library's, MH_DYLIB, and a #! script whose interpreter, in the folder held,
+// is a #! script itself, or a plain file, as the kernel starts no interpreter for a script but a
+// Mach-O program. With /bin held Check passes each, and RunHolding runs each script with /bin/sh,
+// which reads its #! line as a comment and exits 0. A script whose interpreter is a Mach-O program
+// in the folder held is TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders's row. A
+// universal file whose arm64 slice is that library passes Check with /bin not held, as its slices
+// are not read: the limit docs/sandbox.md names, whose line
+// TestTheSandboxDocNamesTheUniversalFileWhoseSlicesAreNotRead reads.
+//
+// What it costs when this fails: the file passes Check and fails after the exec with the system
+// sandbox's exit 71, which a program could give too, in place of ErrUsage naming /bin/sh; or, for
+// the universal file, the doc names a limit the code no longer has.
+func TestOnMacOSAFileTheKernelRefusesWithENOEXECIsHeldToTheShell(t *testing.T) {
+	t.Parallel()
+	dir := realTemp(t, "held", "report")
+	held := filepath.Join(dir, "held")
+	library := filepath.Join(held, "library")
+	header := []byte{0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(library, append(header, make([]byte, 4080)...), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inner, plain := filepath.Join(held, "inner"), filepath.Join(held, "plain")
+	outerScript, outerPlain := filepath.Join(held, "outerscript"), filepath.Join(held, "outerplain")
+	for p, body := range map[string]string{inner: "#!/usr/bin/true\n", plain: "exit 0\n", outerScript: "#!" + inner + "\n", outerPlain: "#!" + plain + "\n"} {
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shell := `which is held as a program is: the program "/bin/sh" cannot be held: it is the file "/bin/sh", whose folder "/bin" no folder held reaches`
+	nested := func(interp string) string {
+		return `is a #! script whose interpreter's real file "` + interp + `" is no Mach-O program, which the kernel refuses to start for a script, so it is run by /bin/sh, ` + shell
+	}
+	for _, r := range []struct {
+		claim, prog, says string
+		runs              bool
+	}{
+		{"a Mach-O library", library, `the program "` + library + `" is neither a #! script nor a Mach-O program, so it is run by /bin/sh, ` + shell, false},
+		{"a script whose interpreter is a script", outerScript, `the program "` + outerScript + `" ` + nested(inner), true},
+		{"a script whose interpreter is a plain file", outerPlain, `the program "` + outerPlain + `" ` + nested(plain), true},
+	} {
+		if _, err := Check(Folders{ReadOnly: []string{held}}, r.prog); !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || !strings.Contains(err.Error(), r.says) {
+			t.Errorf("Check of %s, /bin not held: %v, want ErrUsage, never ErrNoBlock, and %q", r.claim, err, r.says)
+		}
+		if code, said := behindTheBlock(t, r.prog); code != childUsage || !strings.Contains(said, r.says) {
+			t.Errorf("RunHolding of %s, /bin not held: exit %d, said %q; want exit %d and %q", r.claim, code, said, childUsage, r.says)
+		}
+		if _, err := Check(Folders{ReadOnly: []string{held, "/bin"}}, r.prog); err != nil {
+			t.Errorf("Check of %s, /bin held: %v, want nil", r.claim, err)
+		}
+		if !r.runs {
+			continue
+		}
+		if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", r.prog, nil); code != 0 {
+			t.Errorf("RunHolding of %s, /bin held: exit %d, said %q; want 0", r.claim, code, said)
+		}
+	}
+
+	universal := filepath.Join(held, "universal")
+	fat := make([]byte, 4096)
+	binary.BigEndian.PutUint32(fat[0:], 0xcafebabe)
+	binary.BigEndian.PutUint32(fat[4:], 1)
+	binary.BigEndian.PutUint32(fat[8:], 0x0100000c)
+	binary.BigEndian.PutUint32(fat[16:], 4096)
+	binary.BigEndian.PutUint32(fat[20:], 4096)
+	binary.BigEndian.PutUint32(fat[24:], 12)
+	if err := os.WriteFile(universal, append(append(fat, header...), make([]byte, 4080)...), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Check(Folders{ReadOnly: []string{held}}, universal); err != nil {
+		t.Errorf("Check of a universal file whose arm64 slice is a library, /bin not held: %v; want nil, the limit docs/sandbox.md names", err)
 	}
 }
 
