@@ -220,9 +220,12 @@ func TestAProgramsOwnLibrariesNeverVouchForItsFolder(t *testing.T) {
 	}
 }
 
-// TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt: the interpreter is the path after
-// #! and any spaces and tabs, up to a space, tab or newline; a file with no #! names none. A #!
-// line with no end in the first 512 bytes, an empty one, and a relative interpreter are errors.
+// TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt: a #! script's interpreter is the
+// path after #! and any spaces and tabs, up to a space or tab, on a line that ends at a newline or
+// a #, as the macOS kernel reads it. A Mach-O or universal file, in either byte order, needs none,
+// and any other file with no #! is run by /bin/sh, as execvp runs a file the kernel refuses with
+// ENOEXEC. A #! line with no end in the first 512 bytes, an empty one, and a relative interpreter
+// are errors.
 //
 // What it costs when this fails: RunHolding holds a file other than the one the kernel runs as the
 // interpreter, and a script runs one outside the folders, or fails late with exit 71.
@@ -234,16 +237,23 @@ func TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt(t *testing.T) {
 		{"#!/bin/sh\necho", "/bin/sh", ""},
 		{"#! \t/usr/bin/env python3 -u\n", "/usr/bin/env", ""},
 		{"#!/held/run\targ\n", "/held/run", ""},
-		{"\xcf\xfa\xed\xfe a Mach-O file", "", ""},
-		{"", "", ""},
-		{" #!/bin/sh\n", "", ""},
+		{"#!/held/true#/x\n", "/held/true", ""},
+		{"#!/held/run #" + strings.Repeat("x", 600), "/held/run", ""},
+		{"\xcf\xfa\xed\xfe a 64-bit Mach-O file", "", ""},
+		{"\xce\xfa\xed\xfe a 32-bit Mach-O file", "", ""},
+		{"\xfe\xed\xfa\xcf a Mach-O file in the other byte order", "", ""},
+		{"\xca\xfe\xba\xbe a universal file", "", ""},
+		{"exit 0\n", "/bin/sh", ""},
+		{"", "/bin/sh", ""},
+		{" #!/bin/sh\n", "/bin/sh", ""},
 		{"#!/bin/sh", "", "has no end within its first 512 bytes"},
 		{"#!/bin/sh " + strings.Repeat("x", 600) + "\n", "", "has no end within its first 512 bytes"},
 		{"#!\n", "", `names "", which is not an absolute path`},
+		{"#! #/bin/sh\n", "", `names "", which is not an absolute path`},
 		{"#!sh\n", "", `names "sh", which is not an absolute path`},
 	} {
 		head := []byte(r.head)[:min(len(r.head), maxShebang)]
-		got, err := shebang(head)
+		got, err := interpreter(head)
 		switch {
 		case r.says == "" && (err != nil || got != r.interp):
 			t.Errorf("%q: %q, %v; want %q", r.head, got, err, r.interp)

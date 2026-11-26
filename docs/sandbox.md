@@ -15,8 +15,9 @@ since go-landlock takes it for ABI 5 and cannot make the ruleset with the scopes
 
 With RunHolding the program itself is held to the folders, as a file like any other. Its real file,
 where its path ends once each symbolic link on it is followed, must be beneath a folder the caller
-named or its loader's own folder, and on macOS so must each link on the way and a #! script's
-interpreter. RunHolding and Check walk the path before anything is set and refuse a program the
+named or its loader's own folder, and on macOS so must each link on the way and the program that
+runs it, if any: a #! script's interpreter, or /bin/sh for a file with neither #! nor a program's
+format. RunHolding and Check walk the path before anything is set and refuse a program the
 folders do not hold with ErrUsage, naming the folder it would need; they never add that folder,
 since it would widen the block. The other load folders RunHolding adds come from the program's own
 bytes, its run path and the libraries it names, so they never count toward holding the program: a
@@ -25,12 +26,14 @@ folder among them is refused unless the caller names that folder.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
-every exec but of a file beneath the folders, so a program behind the block starts no program
+every exec but of a file beneath the folders and of /usr/bin/true, the dry run's program, which
+reads nothing and exits 0, so a program behind the block starts no other program
 outside them, a shell's command among them, and a link on the path swapped after the walk fails
 closed, with the system sandbox's exit 71. There RunHolding reads a #! script's first line, with no
-lookup, and refuses a script whose interpreter is outside the folders; a program env finds is held
-when env runs it. A file with neither #! nor a program's format is run by /bin/sh, which then
-needs its folder named.
+lookup, as the kernel reads it, to the first newline or #, and refuses a script whose interpreter
+is outside the folders; a program env finds is held when env runs it. A file with neither #! nor a
+program's format, which the kernel refuses and execvp runs with /bin/sh, is refused the same way
+unless /bin is named.
 
 ## What the block does not close
 

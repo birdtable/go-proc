@@ -29,8 +29,9 @@ func TestMacOSHoldsTheProgramAndEveryLinkOnItsPath(t *testing.T) {
 // not held, and starts the copy of true in the folder held, which exits 0. (A copy of env is killed
 // by macOS outside any sandbox, so the starter is the test binary.) A #! script in the folder held
 // whose interpreter is /bin/sh is ErrUsage from RunHolding and Check, naming /bin/sh, before
-// anything is set; one whose interpreter is the copy of true in the folder held runs. A link in the
-// folder held to the copy outside is TestAProgramWhoseRealFileIsNotHeldIsRefusedBeforeTheExec's row.
+// anything is set; one whose interpreter is the copy of true in the folder held runs, and so does
+// one whose #! line goes on after a # with a path outside, which the kernel ends at the #. A link
+// in the folder held to the copy outside is TestAProgramWhoseRealFileIsNotHeldIsRefusedBeforeTheExec's row.
 //
 // What it costs when this fails: a program behind the block starts any program on the machine,
 // outside the folders and their hold, or a script fails late with the system sandbox's exit 71.
@@ -75,6 +76,46 @@ func TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders(t *testing.T) {
 	}
 	if code, said := behindTheBlock(t, heldScript); code != 0 {
 		t.Errorf("RunHolding of a script whose interpreter is held: exit %d, said %q; want 0", code, said)
+	}
+	hashScript := filepath.Join(held, "hashscript")
+	if err := os.WriteFile(hashScript, []byte("#!"+inside+"#"+outside+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Check(Folders{ReadOnly: []string{held}}, hashScript); err != nil {
+		t.Errorf("Check of a script whose #! line ends at a # after its held interpreter: %v, want nil", err)
+	}
+	if code, said := behindTheBlock(t, hashScript); code != 0 {
+		t.Errorf("RunHolding of a script whose #! line ends at a # after its held interpreter: exit %d, said %q; want 0", code, said)
+	}
+}
+
+// TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt: a file in the folder held with no #!
+// and no Mach-O format, which the kernel refuses with ENOEXEC and execvp then runs with /bin/sh, is
+// ErrUsage from RunHolding and Check, naming /bin/sh, before anything is set, unless /bin is held
+// too: then Check passes it and RunHolding runs it, exit 0.
+//
+// What it costs when this fails: the file fails after the exec with the system sandbox's exit 71,
+// which a program could give too, in place of ErrUsage saying which folder it needs.
+func TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt(t *testing.T) {
+	t.Parallel()
+	dir := realTemp(t, "held", "report")
+	held := filepath.Join(dir, "held")
+	plain := filepath.Join(held, "plain")
+	if err := os.WriteFile(plain, []byte("exit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	says := `the program "` + plain + `" is neither a #! script nor a Mach-O program, so it is run by /bin/sh, which is held as a program is: the program "/bin/sh" cannot be held: it is the file "/bin/sh", whose folder "/bin" no folder held reaches`
+	if _, err := Check(Folders{ReadOnly: []string{held}}, plain); !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || !strings.Contains(err.Error(), says) {
+		t.Errorf("Check of a file that is no program, /bin not held: %v, want ErrUsage, never ErrNoBlock, and %q", err, says)
+	}
+	if code, said := behindTheBlock(t, plain); code != childUsage || !strings.Contains(said, says) {
+		t.Errorf("RunHolding of a file that is no program, /bin not held: exit %d, said %q; want exit %d and %q", code, said, childUsage, says)
+	}
+	if _, err := Check(Folders{ReadOnly: []string{held, "/bin"}}, plain); err != nil {
+		t.Errorf("Check of a file that is no program, /bin held: %v, want nil", err)
+	}
+	if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", plain, nil); code != 0 {
+		t.Errorf("RunHolding of a file that is no program, /bin held: exit %d, said %q; want 0", code, said)
 	}
 }
 

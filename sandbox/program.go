@@ -28,7 +28,9 @@ import (
 // after RunHolding has exec'd the sandbox, with its exit 71, which a program could give too, and a
 // link changed after the walk fails there, closed. So on macOS RunHolding refuses such a link
 // first, naming it, and reads a #! script's first line and holds the interpreter it names as it
-// holds a program, with no lookup: a program env finds is held when env runs it.
+// holds a program, with no lookup: a program env finds is held when env runs it. A file that is
+// neither a #! script nor a Mach-O program the kernel refuses with ENOEXEC, and sandbox-exec's
+// execvp runs it with /bin/sh instead, so RunHolding holds /bin/sh for it the same way.
 
 // walked is a program's path as the kernel follows it: each link it goes through, by its own
 // path, in order, and file, the real file it ends on.
@@ -191,16 +193,17 @@ func (n named) holdingProgram(prog string, w walked, rule programRule, dirs []st
 // IMG_SHSIZE.
 const maxShebang = 512
 
-// heldInterpreter is nil when the program prog, whose real file is file, is no #! script, or n
-// holds its interpreter as rule holds a program. Otherwise it is ErrUsage naming the interpreter,
-// or why it cannot be told. It reads the file's first line alone and looks nothing up: a program
-// that env finds is held when env runs it, by the system sandbox.
+// heldInterpreter is nil when the program prog, whose real file is file, is a Mach-O program, or
+// n holds the program that runs it as rule holds a program: a #! script's interpreter, or /bin/sh
+// for a file that is neither. Otherwise it is ErrUsage naming that program, or why it cannot be
+// told. It reads the file's first bytes alone and looks nothing up: a program that env finds is
+// held when env runs it, by the system sandbox.
 func (n named) heldInterpreter(prog, file string, rule programRule) error {
 	head, err := firstBytes(file)
 	if err != nil {
 		return heldf(prog, "its first line cannot be read: %v", err)
 	}
-	interp, err := shebang(head)
+	interp, err := interpreter(head)
 	switch {
 	case err != nil:
 		return heldf(prog, "%v", err)
@@ -211,10 +214,29 @@ func (n named) heldInterpreter(prog, file string, rule programRule) error {
 	if err == nil {
 		err = n.heldProgram(interp, w, rule.linksHeld)
 	}
-	if err != nil {
+	switch {
+	case err == nil:
+		return nil
+	case bytes.HasPrefix(head, []byte("#!")):
 		return fmt.Errorf("the program %q is a #! script, and its interpreter is held as a program is: %w", prog, err)
 	}
-	return nil
+	return fmt.Errorf("the program %q is neither a #! script nor a Mach-O program, so it is run by %s, which is held as a program is: %w", prog, bourneShell, err)
+}
+
+// bourneShell is the program execvp runs a file with when the kernel refuses it with ENOEXEC, as
+// it refuses a file that is neither a #! script nor a Mach-O program: _PATH_BSHELL.
+const bourneShell = "/bin/sh"
+
+// machO is whether a file starting with head is one the macOS kernel runs, or refuses, by its own
+// format, never with ENOEXEC: a Mach-O file of 32 or 64 bits in either byte order, the other one
+// refused with EBADARCH, or a universal file, whose magic is big-endian.
+func machO(head []byte) bool {
+	for _, magic := range [][]byte{{0xce, 0xfa, 0xed, 0xfe}, {0xcf, 0xfa, 0xed, 0xfe}, {0xfe, 0xed, 0xfa, 0xce}, {0xfe, 0xed, 0xfa, 0xcf}, {0xca, 0xfe, 0xba, 0xbe}} {
+		if bytes.HasPrefix(head, magic) {
+			return true
+		}
+	}
+	return false
 }
 
 // firstBytes is the first maxShebang bytes of the file at name, or all of a shorter one. It opens
@@ -237,20 +259,25 @@ func firstBytes(name string) (head []byte, err error) {
 	return head[:got], err
 }
 
-// shebang is the interpreter a file starting with head names on its #! line, as the macOS kernel
-// reads it: after the #! and any spaces and tabs, up to the next space, tab or newline. It is ""
-// for a file with no #!, and an error for a line with no end within maxShebang bytes, no
+// interpreter is the program that runs a file starting with head, as the macOS kernel and execvp
+// tell it. A #! script's is the interpreter on its #! line, read as the kernel reads it: the line
+// ends at the first newline or #, and the interpreter is after the #! and any spaces and tabs, up
+// to the next space or tab. A Mach-O program needs none, "". Any other file, one with no #!, is
+// run by bourneShell. It is an error for a #! line with no end within maxShebang bytes, no
 // interpreter, or one that is not an absolute path.
-func shebang(head []byte) (string, error) {
+func interpreter(head []byte) (string, error) {
 	rest, ok := bytes.CutPrefix(head, []byte("#!"))
-	if !ok {
+	switch {
+	case !ok && machO(head):
 		return "", nil
+	case !ok:
+		return bourneShell, nil
 	}
-	line, _, ended := bytes.Cut(rest, []byte("\n"))
-	if !ended {
+	end := bytes.IndexAny(rest, "#\n")
+	if end < 0 {
 		return "", fmt.Errorf("its #! line has no end within its first %d bytes", maxShebang)
 	}
-	line = bytes.TrimLeft(line, " \t")
+	line := bytes.TrimLeft(rest[:end], " \t")
 	if at := bytes.IndexAny(line, " \t"); at >= 0 {
 		line = line[:at]
 	}

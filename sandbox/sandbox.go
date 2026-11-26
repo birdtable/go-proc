@@ -206,13 +206,15 @@ func blockOn(goos string) Block {
 // beneath ReadWrite it reads, runs, writes, makes and removes, and beneath ReadOnly it reads and
 // runs. Every other file is denied, reads and runs included. The program itself is a file like any
 // other, so its folder is among them: the folder of its real file, the one its path ends on once
-// every symbolic link on it is followed, and on macOS the folder of each of those links and of a #!
-// script's interpreter too. RunHolding and Check walk the path and refuse with ErrUsage a program
-// these folders do not hold, naming the folder; they never add it. The system sandbox holds every
-// exec as well, Landlock on Linux and the profile on macOS, so a program behind the block starts
-// only programs beneath the folders held. The folders of its loader and libraries are not the
-// caller's: RunHolding adds them, read from the program's own bytes, and of them only the loader's
-// own folder counts toward holding the program.
+// every symbolic link on it is followed, and on macOS the folder of each of those links and of the
+// program that runs it, if any: a #! script's interpreter, or /bin/sh for a file that is neither a
+// #! script nor a Mach-O program, as execvp runs it. RunHolding and Check walk the path and refuse
+// with ErrUsage a program these folders do not hold, naming the folder; they never add it. The
+// system sandbox holds every exec as well, Landlock on Linux and the profile on macOS, so a program
+// behind the block starts only programs beneath the folders held, and on macOS /usr/bin/true too,
+// the program of the block's dry run, which reads nothing and exits 0. The folders of its loader
+// and libraries are not the caller's: RunHolding adds them, read from the program's own bytes, and
+// of them only the loader's own folder counts toward holding the program.
 type Folders struct {
 	ReadWrite []string
 	ReadOnly  []string
@@ -237,7 +239,7 @@ type Folders struct {
 // for one that is a program, a search list it cannot follow, and a loader or a library whose real
 // folder is the root or /usr itself, which no load grants, are ErrUsage, naming the file. On macOS
 // nothing is read and none is added: the system's libraries need no folder, and a #! script is not
-// refused.
+// refused, but held to the program that runs it, as Folders says.
 func RunHolding(f Folders, path string, args, environ []string) error {
 	argv, err := usage(path, args)
 	if err != nil {
