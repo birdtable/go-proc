@@ -3,7 +3,9 @@
 package sandbox
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 )
@@ -16,7 +18,8 @@ const prGetNoNewPrivs = 39
 // test's own program, whose load folders it tells, is nil
 // with Linux's Block, every field true, and the process has set nothing:
 // no_new_privs, the first step the block
-// takes, is still unset on this thread.
+// takes, is still unset on this thread. Good folders hold the program, named by its real file;
+// folders that leave its folder out are ErrUsage.
 //
 // What it costs when this fails: the ask starts the block on its caller's own process, or says no on a
 // kernel the block runs on.
@@ -26,10 +29,16 @@ func TestCheckOnThisLinuxKernelSaysYesAndSetsNothing(t *testing.T) {
 	// which end with their goroutines, so no thread this test runs on has it.
 	dir := realTemp(t, "rw", "ro")
 	self, err := os.Executable()
+	if err == nil {
+		self, err = filepath.EvalSymlinks(self)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Check(Folders{ReadWrite: []string{dir + "/rw"}, ReadOnly: []string{dir + "/ro"}}, self)
+	if _, err := Check(Folders{ReadWrite: []string{dir + "/rw"}, ReadOnly: []string{dir + "/ro"}}, self); !errors.Is(err, ErrUsage) {
+		t.Errorf("Check with folders that leave the program's out: %v, want ErrUsage", err)
+	}
+	b, err := Check(Folders{ReadWrite: []string{dir + "/rw"}, ReadOnly: []string{dir + "/ro", filepath.Dir(self)}}, self)
 	if err != nil {
 		t.Fatalf("Check with good folders: %v", err)
 	}
