@@ -91,23 +91,38 @@ func (s *startsOnRead) Read(p []byte) (int, error) {
 // process handed on, as a process started outside exec is, and ends it with the test.
 func inheritingAll(t *testing.T) error {
 	t.Helper()
-	exe, err := os.Executable()
+	process, _, err := startInheritingAll("hold")
 	if err != nil {
 		return err
 	}
-	line, err := windows.UTF16PtrFromString(windows.EscapeArg(exe) + " " + windows.EscapeArg(helperMode+"hold"))
+	t.Cleanup(func() {
+		_ = windows.TerminateProcess(process, 1)
+		_ = windows.CloseHandle(process)
+	})
+	return nil
+}
+
+// startInheritingAll starts this test binary as the helper of the mode and args by CreateProcess
+// with every inheritable handle of this process handed on, and gives its process handle, which the
+// caller ends and closes, and its pid.
+func startInheritingAll(mode string, args ...string) (windows.Handle, int, error) {
+	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return 0, 0, err
+	}
+	words := []string{windows.EscapeArg(exe), windows.EscapeArg(helperMode + mode)}
+	for _, a := range args {
+		words = append(words, windows.EscapeArg(a))
+	}
+	line, err := windows.UTF16PtrFromString(strings.Join(words, " "))
+	if err != nil {
+		return 0, 0, err
 	}
 	si := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
 	var pi windows.ProcessInformation
 	if err := windows.CreateProcess(nil, line, nil, nil, true, windows.CREATE_NO_WINDOW, nil, nil, &si, &pi); err != nil {
-		return err
+		return 0, 0, err
 	}
 	_ = windows.CloseHandle(pi.Thread)
-	t.Cleanup(func() {
-		_ = windows.TerminateProcess(pi.Process, 1)
-		_ = windows.CloseHandle(pi.Process)
-	})
-	return nil
+	return pi.Process, int(pi.ProcessId), nil
 }

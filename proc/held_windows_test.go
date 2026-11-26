@@ -60,12 +60,16 @@ func endsIn(t *testing.T, h windows.Handle, d time.Duration) bool {
 // its leader is in the guard job, the leader suspended in it, given its handle of the tree's job, or
 // resumed in that job, takes the leader with it: the leader has ended within endsWithin. A caller
 // killed once the guard is lifted leaves the tree running, as a detached tree outlives its caller:
-// the leader writes that it outlived the caller.
+// the leader writes that it outlived the caller. A caller killed in the guard after it starts a
+// process by CreateProcess with every inheritable handle of its own takes the leader with it as well,
+// and that process still runs: the guard's handle is the caller's alone, so no process the caller
+// starts keeps the guard open.
 //
 // What it costs when this fails: a caller that dies as it starts a tree, killed by a test's timeout
 // or by its user, leaves the leader suspended with no parent, in a job that does not end it when its
 // handles close: a process no id names, which holds what it was given until the machine restarts;
-// or, when the guard is not lifted, no detached tree outlives the process that started it.
+// or, when the guard is not lifted, no detached tree outlives the process that started it; or a
+// process any code of the caller's starts as the tree starts holds the guard, and the leader with it.
 func TestACallerKilledBeforeItsTreeIsWholeLeavesNoLeader(t *testing.T) {
 	t.Parallel()
 	exe, err := os.Executable()
@@ -73,15 +77,21 @@ func TestACallerKilledBeforeItsTreeIsWholeLeavesNoLeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
-		stage    startStage
-		outlives bool
+		stage      startStage
+		outlives   bool
+		inheritAll bool // the caller first starts a process with every inheritable handle of its own
 	}{
-		{stageGuarded, false},
-		{stageGiven, false},
-		{stageResumed, false},
-		{stageFreed, true},
+		{stageGuarded, false, false},
+		{stageGiven, false, false},
+		{stageResumed, false, false},
+		{stageFreed, true, false},
+		{stageGuarded, false, true},
 	} {
-		t.Run(string(c.stage), func(t *testing.T) {
+		name := string(c.stage)
+		if c.inheritAll {
+			name += " with every handle inherited"
+		}
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// pipe, not os.Pipe, whose ends are inheritable here: a process another test starts
 			// would take the write end, and the read would never end.
@@ -90,7 +100,12 @@ func TestACallerKilledBeforeItsTreeIsWholeLeavesNoLeader(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = r.Close() })
-			caller := exec.Command(exe, helperMode+"detach-at", string(c.stage), strconv.Itoa(os.Getpid())) //nolint:gosec,noctx // the test binary itself, as a helper, which the test kills
+			args := []string{helperMode + "detach-at", string(c.stage), strconv.Itoa(os.Getpid())}
+			said := 1
+			if c.inheritAll {
+				args, said = append(args, "inherit-all"), 2
+			}
+			caller := exec.Command(exe, args...) //nolint:gosec,noctx // the test binary itself, as a helper, which the test kills
 			caller.Stdout, caller.Stderr = w, w
 			err = startTestProcess(caller)
 			_ = w.Close()
@@ -98,11 +113,20 @@ func TestACallerKilledBeforeItsTreeIsWholeLeavesNoLeader(t *testing.T) {
 				t.Fatal(err)
 			}
 			br := bufio.NewReader(r)
-			pid, err := strconv.Atoi(lines(t, br, 1)["held"])
+			got := lines(t, br, said)
+			pid, err := strconv.Atoi(got["held"])
 			if err != nil {
 				t.Fatalf("the caller's leader pid: %v", err)
 			}
 			leader := heldProcess(t, pid)
+			var holder windows.Handle
+			if c.inheritAll {
+				h, err := strconv.Atoi(got["inheriting"])
+				if err != nil {
+					t.Fatalf("the pid of the process that inherits the caller's handles: %v", err)
+				}
+				holder = heldProcess(t, h)
+			}
 			if err := endTestProcess(caller); err != nil {
 				t.Fatalf("killing the caller: %v", err)
 			}
@@ -114,7 +138,10 @@ func TestACallerKilledBeforeItsTreeIsWholeLeavesNoLeader(t *testing.T) {
 				return
 			}
 			if !endsIn(t, leader, endsWithin) {
-				t.Fatalf("the leader %d still runs %v after its caller was killed at %s, want it ended with the guard job", pid, endsWithin, c.stage)
+				t.Fatalf("the leader %d still runs %v after its caller was killed at %s, want it ended with the guard job", pid, endsWithin, name)
+			}
+			if c.inheritAll && endsIn(t, holder, 0) {
+				t.Fatal("the process that inherits the caller's handles has ended, so the row shows nothing of what it holds")
 			}
 		})
 	}

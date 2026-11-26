@@ -692,9 +692,12 @@ func brkNoWindow() int {
 // heldModes runs the helper modes of a start whose caller a test kills, and consoleModes's, and
 // says whether mode is one:
 //
-//   - detach-at <stage> <binary>: starts a tree by detachWith whose leader is outlive with this
-//     helper's pid and binary, its output this helper's stdout; at the startStage named stage it
-//     writes "held " and the leader's pid and a newline, and holds there while holdWhile does.
+//   - detach-at <stage> <binary> [inherit-all]: starts a tree by detachWith whose leader is outlive
+//     with this helper's pid and binary, its output this helper's stdout; at the startStage named
+//     stage it writes "held " and the leader's pid and a newline, and holds there while holdWhile
+//     does. With inherit-all it first starts hold-while with binary by CreateProcess with every
+//     inheritable handle of this helper handed on, and writes "inheriting " and that process's pid
+//     and a newline.
 //   - outlive <pid> <binary>: waits for process pid to end, writes "outlived " and its own pid and a
 //     newline, then holds while holdWhile does.
 //   - race <start|run> <binary>: writes "go" and a newline, then starts a holding helper by
@@ -705,7 +708,9 @@ func brkNoWindow() int {
 func heldModes(mode string, args []string) (int, bool) {
 	switch {
 	case mode == "detach-at" && len(args) == 2:
-		return detachAt(startStage(args[0]), args[1]), true
+		return detachAt(startStage(args[0]), args[1], false), true
+	case mode == "detach-at" && len(args) == 3 && args[2] == "inherit-all":
+		return detachAt(startStage(args[0]), args[1], true), true
 	case mode == "outlive" && len(args) == 2:
 		return outlive(args[0], args[1]), true
 	case mode == "race" && len(args) == 2:
@@ -715,7 +720,7 @@ func heldModes(mode string, args []string) (int, bool) {
 }
 
 // detachAt is the detach-at helper.
-func detachAt(stage startStage, binary string) int {
+func detachAt(stage startStage, binary string, inherit bool) int {
 	exe, err := os.Executable()
 	if err != nil {
 		return wrote(0, err)
@@ -726,6 +731,17 @@ func detachAt(stage startStage, binary string) int {
 	_, err = detachWith(cmd, func(s startStage, pid int) {
 		if s != stage {
 			return
+		}
+		if inherit {
+			process, holder, err := startInheritingAll("hold-while", binary)
+			if err != nil {
+				code = wrote(0, err)
+				return
+			}
+			_ = windows.CloseHandle(process) // the test ends it, by its pid; the binary's end ends it too
+			if code = wrote(fmt.Fprintf(os.Stdout, "inheriting %d\n", holder)); code != 0 {
+				return
+			}
 		}
 		if code = wrote(fmt.Fprintf(os.Stdout, "held %d\n", pid)); code == 0 {
 			code = holdWhile(binary)
