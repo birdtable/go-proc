@@ -698,3 +698,7 @@ linters:
       - path: (^|/)tools/gate/[^/]+\.go$
         linters: [depguard]
         text: "cli\\.process\\.1:"
+      # cli.config.7: tools/gate parses its own step's arguments (namespace's -cached), as a command does.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [depguard]
+        text: "cli\\.config\\.7:"
