@@ -3,6 +3,7 @@ package execsites
 import (
 	"cmp"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -79,9 +80,17 @@ func sites(top string) ([]string, error) {
 }
 
 // goFiles is each of the module's Go files beneath top, by its path from top with forward slashes,
-// its test files only when tests is true. Every file is listed, whatever system or tag it builds for;
-// testdata, dot folders and a folder that is a module of its own are not the module's.
+// its test files only when tests is true. Every file is listed, whatever system or tag it builds for.
 func goFiles(top string, tests bool) ([]string, error) {
+	return moduleFiles(top, func(_, name string) (bool, error) {
+		return strings.HasSuffix(name, ".go") && (tests || !strings.HasSuffix(name, "_test.go")), nil
+	})
+}
+
+// moduleFiles is each of the module's files beneath top that keep takes, by its path from top with
+// forward slashes, in the order the folders are walked. keep is given the file's folder and name.
+// testdata, dot folders and a folder that is a module of its own are not the module's.
+func moduleFiles(top string, keep func(dir, name string) (bool, error)) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(top, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -99,8 +108,8 @@ func goFiles(top string, tests bool) ([]string, error) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(p, ".go") || (!tests && strings.HasSuffix(p, "_test.go")) {
-			return nil
+		if ok, err := keep(filepath.Dir(p), d.Name()); !ok || err != nil {
+			return err
 		}
 		rel, err := filepath.Rel(top, p)
 		out = append(out, filepath.ToSlash(rel))
@@ -466,6 +475,101 @@ func TestAPlantedTrampolineIsListedByItsFileAndLine(t *testing.T) {
 	}
 	if !slices.Equal(got, planted) {
 		t.Errorf("the trampolines listed: %q; want %q", got, planted)
+	}
+}
+
+// trampolineAsm is each file not Go that the module builds: the assembly trampolines that jump to
+// the libc functions sandbox/spawn_darwin.go imports, one for each architecture macOS runs on.
+func trampolineAsm() []string {
+	return []string{"sandbox/spawn_darwin_amd64.s", "sandbox/spawn_darwin_arm64.s"}
+}
+
+// builtFiles is each file of the module beneath top that the go command builds into a package but is
+// not Go: C, C++, Objective-C, Fortran, assembly, a header, SWIG or a .syso object. Which ones is
+// go/build's call, by its own list, through MatchFile, with every system's and tag's files taken.
+// Each can make a syscall, or bring in cgo, with no Go line for the other rows to read. A file whose
+// name begins with "_" or "." is none, as the go command builds neither.
+func builtFiles(top string) ([]string, error) {
+	ctxt := build.Default
+	ctxt.UseAllFiles = true
+	return moduleFiles(top, func(dir, name string) (bool, error) {
+		if strings.HasSuffix(name, ".go") {
+			return false, nil
+		}
+		return ctxt.MatchFile(dir, name)
+	})
+}
+
+// TestTheModuleBuildsNoFileButGoAndTheTwoTrampolines: the only files of the module the go command
+// builds that are not Go are the two assembly trampolines of the macOS block. One missing is red,
+// as the row then holds a file that is not there.
+//
+// What it costs when this fails: an assembly file makes a syscall, a .syso links in code nothing
+// reads, or a .swig or a C file brings cgo in with no import "C", an exec no other row lists.
+func TestTheModuleBuildsNoFileButGoAndTheTwoTrampolines(t *testing.T) {
+	t.Parallel()
+	got, err := builtFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	more, missing := extra(got, trampolineAsm())
+	for _, s := range more {
+		t.Errorf("a file the go command builds that is not Go: %s; the module builds only Go and the two trampolines, so take it out, or ask for a ruling that allows it", s)
+	}
+	for _, s := range missing {
+		t.Errorf("a trampoline trampolineAsm names is not in the source: %s; take it out of trampolineAsm with the code", s)
+	}
+}
+
+// TestAPlantedBuiltFileIsListedByItsPath: in a scratch tree that holds one of the two trampolines,
+// the other is missing, and an assembly file elsewhere, a .syso and a .swig are each listed, as are
+// a C file and a header, a file built for another system and one whose build line excludes it. Not
+// listed: a C file in testdata, a file in a dot folder or in a module of its own, a name beginning
+// with "_", a Go file and a file the go command does not build.
+//
+// What it costs when this fails: the row over the real tree passes a file the go command builds,
+// and code the other rows cannot read reaches the kernel or libc.
+func TestAPlantedBuiltFileIsListedByItsPath(t *testing.T) {
+	t.Parallel()
+	top := t.TempDir()
+	amd64 := trampolineAsm()[0]
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(amd64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plant(t, top, amd64, string(b))
+	asm := "#include \"textflag.h\"\n\nTEXT ·raw(SB),NOSPLIT,$0-0\n\tRET\n"
+	plant(t, top, "proc/raw_linux_amd64.s", asm)
+	plant(t, top, "proc/raw_windows_arm64.s", asm)
+	plant(t, top, "proc/ignored.s", "//go:build ignore\n\n"+asm)
+	plant(t, top, "sandbox/blob_darwin_arm64.syso", "\x7fELF")
+	plant(t, top, "sandbox/wrap.swig", "%module wrap\n")
+	plant(t, top, "service/exec.c", "#include <unistd.h>\n")
+	plant(t, top, "service/exec.h", "int again(void);\n")
+	plant(t, top, "proc/testdata/x.c", "#include <unistd.h>\n")
+	plant(t, top, "proc/.hidden/x.s", asm)
+	plant(t, top, "tools/gate/go.mod", "module gate\n")
+	plant(t, top, "tools/gate/x.s", asm)
+	plant(t, top, "proc/_skipped.s", asm)
+	plant(t, top, "proc/notes.txt", "not built\n")
+	plant(t, top, "proc/raw.go", "package proc\n")
+	got, err := builtFiles(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	more, missing := extra(got, trampolineAsm())
+	slices.Sort(more)
+	planted := []string{
+		"proc/ignored.s",
+		"proc/raw_linux_amd64.s",
+		"proc/raw_windows_arm64.s",
+		"sandbox/blob_darwin_arm64.syso",
+		"sandbox/wrap.swig",
+		"service/exec.c",
+		"service/exec.h",
+	}
+	if !slices.Equal(more, planted) || !slices.Equal(missing, trampolineAsm()[1:]) {
+		t.Errorf("the built files listed past the trampolines: %q, and the trampolines missing: %q; want %q and %q", more, missing, planted, trampolineAsm()[1:])
 	}
 }
 
