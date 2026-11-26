@@ -209,7 +209,7 @@ const maxShebang = 512
 // it, by the system sandbox.
 func (n named) heldInterpreter(prog, file string, rule programRule) error {
 	if err := mayRunHere(file); err != nil {
-		return fmt.Errorf("the program %q may not run: access(2) says this caller may not run its real file %q (%v), and the kernel refuses its exec before any interpreter reads it: %w", prog, file, err, errUsage)
+		return fmt.Errorf("the program %q may not run: access(2) says this caller may not run its real file %q (%w), and the kernel refuses its exec before any interpreter reads it: %w", prog, file, err, errUsage)
 	}
 	head, err := firstBytes(file)
 	if err != nil {
