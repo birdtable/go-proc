@@ -5,7 +5,8 @@
 //	go -C tools/gate run . -top <the repository's top> <step> [arguments]
 //
 // and its steps are lint, layers, test-short, namespace, psx and notice-check, each the member of
-// that name, or for psx the first command of licenses. A step's exit is 0 when it holds, 1 when it
+// that name, or for psx the first command of licenses, and budget, each tier's budget step (budget.go
+// says how). A step's exit is 0 when it holds, 1 when it
 // does not or could not finish, and 2 for arguments it does not take. It is a module of its own, as
 // the tools are, so that go-proc's go.mod, its lint and its layer rows are as they were, and task
 // size leaves it out. Its own test is task taskfile's: Taskfile.yml calls Go, by go-testkit's
@@ -53,6 +54,7 @@ func steps() map[string]step {
 		"namespace":    namespaceStep,
 		"psx":          psxStep,
 		"notice-check": noticeStep,
+		"budget":       budgetStep,
 	}
 }
 
@@ -71,7 +73,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		args = args[2:]
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "gate: a step is the first argument: lint, layers, test-short, namespace, psx or notice-check")
+		fmt.Fprintln(stderr, "gate: a step is the first argument: lint, layers, test-short, namespace, psx, notice-check or budget")
 		return 2
 	}
 	s, ok := steps()[args[0]]
