@@ -5,7 +5,7 @@ version: "3"
 # (deps:), each member with a timeout: on its cmds line, go-run's, never under a minute
 # and at least three times the member's measured time, so a first run that builds the
 # pinned tool fits too. A member waits only for one it needs; none of these needs
-# another, so none waits. Each tier's budget step is gate/budget.sh, which has hatch budget
+# another, so none waits. Each tier's budget step is tools/gate's budget, which has hatch budget
 # hold it to its budget in budgets.yaml: the
 # commit and release tiers by their elapsed seconds, the push tier by its members' CPU time.
 # hatch is pinned in tools/hatch.mod and called through go tool, as
@@ -30,6 +30,10 @@ env:
 vars:
   TOOL: go tool -modfile=tools
   GATE: CGO_ENABLED=0 go -C tools/gate run . -top {{.ROOT_DIR}}
+  # BUDGET is tools/gate's budget step, with no CGO_ENABLED in front: the step runs hatch and the
+  # tier's members, which take the caller's environment unchanged, so a tool a member builds with
+  # no CGO_ENABLED of its own is the one the cache holds.
+  BUDGET: go -C tools/gate run . -top {{.ROOT_DIR}} budget
   GORACE_TESTS: '${GORACE:+$GORACE }atexit_sleep_ms=0'
 
 tasks:
@@ -287,18 +291,18 @@ tasks:
       - cmd: 'if ls .changes/unreleased/*.yaml > /dev/null 2>&1; then {{.TOOL}}/changie.mod changie batch patch --dry-run > /dev/null; fi'
         timeout: 10m
 
-  # Each tier's budget step is gate/budget.sh, its tier and step set here in literal words, as its
-  # comment says why: no start, load or tier rides a Task var, which the caller's environment would
-  # set over the tier's own. pre-commit and release start and end with it, and keep the start per
-  # run, so two runs of one tier each time themselves.
+  # Each tier's budget step is tools/gate's budget, its tier and step set here in literal words, as
+  # tools/gate/budget.go says why: no start, load or tier rides a Task var, which the caller's
+  # environment would set over the tier's own. pre-commit and release start and end with it, and keep
+  # the start per run, by $$, go-task's own pid, so two runs of one tier each time themselves.
   pre-commit:
     desc: the tier a commit runs
     cmds:
-      - cmd: tier=pre-commit; step=start; . ./gate/budget.sh
+      - cmd: '{{.BUDGET}} pre-commit start $$'
         silent: true
         timeout: 1m
       - task: pre-commit-members
-      - cmd: tier=pre-commit; step=end; . ./gate/budget.sh
+      - cmd: '{{.BUDGET}} pre-commit end $$'
         silent: true
         timeout: 2m
 
@@ -314,7 +318,7 @@ tasks:
   pre-push:
     desc: the tier a push runs, and the only claim of done
     cmds:
-      - cmd: tier=pre-push; step=cpu; . ./gate/budget.sh
+      - cmd: '{{.BUDGET}} pre-push cpu'
         silent: true
         timeout: 5m
 
@@ -328,11 +332,11 @@ tasks:
   release:
     desc: the tier a release runs
     cmds:
-      - cmd: tier=release; step=start; . ./gate/budget.sh
+      - cmd: '{{.BUDGET}} release start $$'
         silent: true
         timeout: 1m
       - task: release-members
-      - cmd: tier=release; step=end; . ./gate/budget.sh
+      - cmd: '{{.BUDGET}} release end $$'
         silent: true
         timeout: 2m
 

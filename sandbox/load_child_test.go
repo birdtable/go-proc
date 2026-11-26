@@ -42,7 +42,7 @@ const (
 // no load folder is left out.
 func LoadChild(args []string) (int, bool) {
 	if len(args) >= 3 && args[1] == starter {
-		return started(args[2:]), true
+		return startedByStarter(args[2:]), true
 	}
 	if len(args) < 4 || args[1] != argvChild && (len(args) > 5 || args[1] != loadChild) {
 		return 0, false
@@ -73,9 +73,9 @@ func LoadChild(args []string) (int, bool) {
 	return answered(report, run()), true
 }
 
-// started is the exit of the program argv names, run with argv and the standard streams, or
+// startedByStarter is the exit of the program argv names, run with argv and the standard streams, or
 // starterRefused, written to stdout with why, when it could not start.
-func started(argv []string) int {
+func startedByStarter(argv []string) int {
 	files := []*os.File{os.NewFile(0, "stdin"), os.NewFile(1, "stdout"), os.NewFile(2, "stderr")}
 	p, err := os.StartProcess(argv[0], argv, &os.ProcAttr{Files: files}) //nolint:forbidigo // the starter is the program behind the block that starts another, the exec the block holds
 	if err != nil {
@@ -97,4 +97,28 @@ func answered(report string, err error) int {
 		return childUsage
 	}
 	return childFailed
+}
+
+// holdChild is the first argument that makes the test binary a caller of RunHolding with folders the
+// live row names, in a process of its own, which the block is set on.
+const holdChild = "sandbox-hold-child"
+
+// HoldChild is the test binary as the live row's caller, which TestMain asks with the process's
+// arguments after LoadChild: holdChild, a report, a read-only folder, a program and its arguments.
+// It holds the program to the report's folder, read-write, and to the read-only folder and the
+// program's own folder, read-only, and runs it by RunHolding with no environment. It returns only
+// when the program did not run: the error is written to the report, and the exit is childUsage for
+// ErrUsage and childFailed for any other.
+func HoldChild(args []string) (int, bool) {
+	if len(args) < 5 || args[1] != holdChild {
+		return 0, false
+	}
+	report, readOnly, prog := args[2], args[3], args[4]
+	f := Folders{ReadWrite: []string{filepath.Dir(report)}, ReadOnly: []string{readOnly, filepath.Dir(prog)}}
+	err := RunHolding(f, prog, args[5:], nil)
+	_ = os.WriteFile(report, []byte(fmt.Sprint(err)), 0o600)
+	if errors.Is(err, ErrUsage) {
+		return childUsage, true
+	}
+	return childFailed, true
 }

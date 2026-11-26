@@ -53,14 +53,15 @@ func repo(t *testing.T, file string) string {
 // program is an executable file that writes a marker file when git runs it, and the marker's path.
 // It is written with syscall.ForkLock held for reading, so no fork of this process starts while it
 // is open for writing: a child forked then would hold it open until its own exec, and git's start of
-// it in that time fails `text file busy` on Linux.
+// it in that time fails `text file busy` on Linux. The script names the marker with forward slashes,
+// a path Git for Windows' sh reads as the system does.
 func program(t *testing.T) (path, marker string) {
 	t.Helper()
 	dir := t.TempDir()
 	marker = filepath.Join(dir, "ran")
 	path = filepath.Join(dir, "hook")
 	syscall.ForkLock.RLock()
-	err := os.WriteFile(path, []byte("#!/bin/sh\n: > '"+marker+"'\nexit 0\n"), 0o700)
+	err := os.WriteFile(path, []byte("#!/bin/sh\n: > '"+filepath.ToSlash(marker)+"'\nexit 0\n"), 0o700)
 	syscall.ForkLock.RUnlock()
 	if err != nil {
 		t.Fatal(err)
