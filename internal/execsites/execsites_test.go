@@ -469,6 +469,78 @@ func TestAPlantedTrampolineIsListedByItsFileAndLine(t *testing.T) {
 	}
 }
 
+// cgoImports is each import of "C" in the module's Go files beneath top, test files included, as
+// "<file>:<line> import \"C\"", in the order goFiles walks the files. Through cgo a file calls C
+// code that no row of Go reads, libc's execve, posix_spawn and system among it, so the module has
+// none: a later need is a ruling, not an entry here. A cgo fixture lives in testdata, which goFiles
+// does not list.
+func cgoImports(top string) ([]string, error) {
+	files, err := goFiles(top, true)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, rel := range files {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(top, filepath.FromSlash(rel)), nil, parser.SkipObjectResolution|parser.ImportsOnly)
+		if err != nil {
+			return nil, err
+		}
+		for _, spec := range f.Imports {
+			if imp, err := strconv.Unquote(spec.Path.Value); err == nil && imp == "C" {
+				out = append(out, rel+":"+strconv.Itoa(fset.Position(spec.Path.Pos()).Line)+` import "C"`)
+			}
+		}
+	}
+	return out, nil
+}
+
+// TestNoFileOfTheModuleUsesCgo: no Go file of the module, test files included, imports "C". The
+// sandbox's unsafe row refuses it in kernel_linux.go alone, and CI's go test builds with cgo
+// wherever the runner has it.
+//
+// What it costs when this fails: a file calls libc's execve, posix_spawn or system through cgo, an
+// exec the other rows do not list and lint does not ban, and only a reading of the source would
+// find it.
+func TestNoFileOfTheModuleUsesCgo(t *testing.T) {
+	t.Parallel()
+	got, err := cgoImports(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range got {
+		t.Errorf("a cgo file: %s; the module has no cgo, so take it out, or ask for a ruling that allows it", s)
+	}
+}
+
+// TestAPlantedCgoImportIsListedByItsFileAndLine: in a scratch tree, an import of "C" is listed by
+// its file and line, in a file of the library and in a test file, alone or in an import group, under
+// a name or none. Not listed: one in testdata, in a dot folder or in a module of its own, the text
+// "C" in a string or a comment, and a package whose path ends in C.
+//
+// What it costs when this fails: the row over the real tree passes a cgo file spelled another way,
+// and the library calls libc's exec family where nothing holds what it is given.
+func TestAPlantedCgoImportIsListedByItsFileAndLine(t *testing.T) {
+	t.Parallel()
+	top := t.TempDir()
+	cgo := "package proc\n\n// #include <unistd.h>\nimport \"C\"\n\nfunc again() { C.execv(nil, nil) }\n"
+	plant(t, top, "proc/again_cgo.go", cgo)
+	plant(t, top, "sandbox/again_test.go", "package sandbox\n\nimport (\n\t\"testing\"\n\n\tc \"C\"\n)\n\nfunc TestAgain(t *testing.T) { c.system(nil) }\n")
+	plant(t, top, "proc/testdata/x.go", cgo)
+	plant(t, top, "proc/.hidden/x.go", cgo)
+	plant(t, top, "tools/gate/go.mod", "module gate\n")
+	plant(t, top, "tools/gate/x.go", cgo)
+	plant(t, top, "proc/text.go", "package proc\n\nimport \"example.com/C\"\n\n// import \"C\"\nvar fixture = `import \"C\"`\n\nvar _ = C.X\n")
+	got, err := cgoImports(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planted := []string{`proc/again_cgo.go:4 import "C"`, `sandbox/again_test.go:6 import "C"`}
+	if !slices.Equal(got, planted) {
+		t.Errorf("the cgo imports listed: %q; want %q", got, planted)
+	}
+}
+
 // plant writes text to the file rel beneath top, making its folders.
 func plant(t *testing.T, top, rel, text string) {
 	t.Helper()

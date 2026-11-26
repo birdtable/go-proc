@@ -13,8 +13,11 @@
 // file of the module, test files included, outside sandbox/spawn_darwin.go, by file and line, and
 // want none. The compiler refuses the other //go:cgo_ directives outside cgo's own files.
 //
+// Nor may a file call libc through cgo: the tests list each import of "C" in every Go file of the
+// module, test files included, by file and line, and want none. The module has no cgo, and a later
+// need for it is a ruling, not an entry here.
+//
 // Not held here, and held by review: a raw execve, Syscall(SYS_EXECVE, ...), which the raw-syscall
-// lint row keeps to a file built for one system; assembly, as the tests read only Go files; and cgo,
-// an import of "C", which the sandbox's unsafe row refuses in kernel_linux.go alone.
+// lint row keeps to a file built for one system; and assembly, as the tests read only Go files.
 // It has no code of its own; its tests read the module's source.
 package execsites
