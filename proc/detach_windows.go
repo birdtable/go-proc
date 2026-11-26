@@ -41,30 +41,41 @@ func detachFromTerminal(c *exec.Cmd) {
 	c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP}
 }
 
-// detach starts cmd detached, suspended, in a Job Object made for it under a name drawn at random,
-// and resumes it once it is in the job, so every process it starts is in the job too. The job does
-// not end its processes when its handles close: the tree outlives this process. The leader is given
-// a handle of the job, which keeps the name while the leader lives, since Windows drops an object's
-// name once its last handle closes; this process closes its own before it returns. A name some job
-// already has is not taken: the job is not this one's.
+// detach starts cmd detached, suspended, in a guard job that ends it if this process dies before the
+// tree is whole, and in a Job Object made for it under a name drawn at random, and resumes it once it
+// is in that job, so every process it starts is in the job too. The tree's job does not end its
+// processes when its handles close: once the guard's kill on close is lifted, the tree outlives this
+// process. The leader is given a handle of the tree's job, which keeps the name while the leader
+// lives, since Windows drops an object's name once its last handle closes; this process closes its
+// own before it returns. A name some job already has is not taken: the job is not this one's.
 func detach(cmd *process, _ procRoot, _ string) (Tree, error) { return detachWith(cmd, nil) }
 
-// detachWith is detach. between, given only by a test of the package, runs once the leader holds
-// its handle of the job and before this process closes its own; production code passes nil.
-func detachWith(cmd *process, between func()) (Tree, error) {
+// startStage is a step of a detached start once the leader is in its guard job, at which a test of
+// the package acts by detachWith's at.
+type startStage string
+
+// The steps of a detached start, in order: the leader in its guard job, suspended; given its handle
+// of the tree's job; in the tree's job and resumed; and the guard's kill on close lifted, the tree
+// then whole.
+const (
+	stageGuarded startStage = "guarded"
+	stageGiven   startStage = "given"
+	stageResumed startStage = "resumed"
+	stageFreed   startStage = "freed"
+)
+
+// detachWith is detach. at, given only by a test of the package, is called at each startStage with
+// the leader's pid, before this process closes its handles of the guard and the tree's job;
+// production code passes nil.
+func detachWith(cmd *process, at func(startStage, int)) (Tree, error) {
 	name := jobName()
 	job, err := createJob(name)
 	if err != nil {
 		return Tree{}, err
 	}
-	detachFromTerminal(cmd)
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
-	err = cmd.Start()
+	guard, err := killingJob("leader's guard job")
 	if err == nil {
-		err = admit(job, cmd)
-	}
-	if err == nil && between != nil {
-		between()
+		err = errors.Join(admit(guard, job, cmd, at), windows.CloseHandle(guard))
 	}
 	if err = errors.Join(err, windows.CloseHandle(job)); err != nil {
 		return Tree{}, err
@@ -79,20 +90,57 @@ func jobName() string {
 	return jobPrefix + hex.EncodeToString(b[:])
 }
 
-// admit gives the started, suspended leader its handle of job, assigns it to job and resumes it. A
-// leader not given its handle, not assigned, or not resumed, is ended, the job with it, and reaped,
-// so nothing started runs: what it costs is the tree, which Start does not give.
-func admit(job windows.Handle, cmd *process) error {
-	if err := give(job, cmd); err != nil {
+// admit starts cmd suspended and in guard (startHeld), gives the leader its handle of job, assigns
+// it to job, resumes it, and lifts guard's kill on close. A leader not started is no tree and
+// nothing runs. A leader not put in guard is killed and reaped. A leader in guard that is not given
+// its handle, not assigned, not resumed, or whose guard is not lifted, is ended with guard, and with
+// what it started, and reaped, so nothing started runs: what it costs is the tree, which Start does
+// not give. at is detachWith's.
+func admit(guard, job windows.Handle, cmd *process, at func(startStage, int)) error {
+	detachFromTerminal(cmd)
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	started, err := startHeld(guard, cmd)
+	switch {
+	case !started:
+		return err
+	case err != nil:
 		return errors.Join(err, cmd.Process.Kill(), cmd.Wait())
 	}
-	if err := assign(job, cmd); err != nil {
-		return errors.Join(err, cmd.Process.Kill(), cmd.Wait())
+	reached := func(s startStage) {
+		if at != nil {
+			at(s, cmd.Process.Pid)
+		}
 	}
-	if err := resume(uint32(cmd.Process.Pid)); err != nil { //nolint:gosec // G115: a Windows pid is a DWORD, which os keeps as an int
-		return errors.Join(err, windows.TerminateJobObject(job, 1), cmd.Wait())
+	reached(stageGuarded)
+	err = give(job, cmd)
+	if err == nil {
+		reached(stageGiven)
+		err = assign(job, cmd)
 	}
+	if err == nil {
+		err = resume(uint32(cmd.Process.Pid)) //nolint:gosec // G115: a Windows pid is a DWORD, which os keeps as an int
+	}
+	if err == nil {
+		reached(stageResumed)
+		if err = killOnClose(guard, false); err != nil {
+			err = fmt.Errorf("proc: lifting the leader's guard job's kill on close: %w", err)
+		}
+	}
+	if err != nil {
+		return errors.Join(err, endGuard(guard, cmd), cmd.Wait())
+	}
+	reached(stageFreed)
 	return nil
+}
+
+// endGuard ends every process in guard, the leader among them. A guard that cannot be ended has its
+// leader killed by its own handle, so the wait after it returns.
+func endGuard(guard windows.Handle, cmd *process) error {
+	err := windows.TerminateJobObject(guard, 1)
+	if err == nil {
+		return nil
+	}
+	return errors.Join(fmt.Errorf("proc: ending the leader's guard job: %w", err), cmd.Process.Kill())
 }
 
 // give puts a handle of job in the leader pid, started and suspended, with the right to wait on the

@@ -115,6 +115,30 @@ func setJob(job windows.Handle, class uint32, info uintptr, size uint32, between
 	return err
 }
 
+// killingJob makes a job with no name, which no other process opens, set to end what is in it when
+// its last handle closes. what names the job in an error.
+func killingJob(what string) (windows.Handle, error) {
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return 0, fmt.Errorf("proc: making the %s: %w", what, err)
+	}
+	if err := killOnClose(job, true); err != nil {
+		return 0, errors.Join(fmt.Errorf("proc: setting the %s to kill on close: %w", what, err), windows.CloseHandle(job))
+	}
+	return job, nil
+}
+
+// killOnClose sets job to end what is in it when its last handle closes; with on false it clears
+// that, and every other limit of job.
+func killOnClose(job windows.Handle, on bool) error {
+	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	if on {
+		info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	}
+	return setJob(job, windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil) //nolint:gosec // G103: the job call takes the struct Windows defines, by its address and size
+}
+
 // queryJob reads job's information of class into the struct Windows defines for it, at info and of
 // size bytes, as setJob sets it, with go:uintptrescapes and between as setJob has them.
 //
@@ -126,42 +150,59 @@ func queryJob(job windows.Handle, class int32, info uintptr, size uint32, betwee
 	return windows.QueryInformationJobObject(job, class, info, size, nil)
 }
 
-// start starts the child suspended, assigns it to the job, and only then resumes it. A child that
-// cannot be assigned, or whose context ended while it was suspended, is killed before it runs.
+// start starts the child suspended and assigns it to the job as the first call after the start
+// returns (startHeld), then resumes it. A child that cannot be assigned is killed before it runs, and
+// one whose context ended while it was suspended is ended with the job, before it runs.
 func (g *group) start() error {
-	if err := g.cmd.Start(); err != nil {
-		return errors.Join(err, g.stop())
-	}
-	assigned, err := g.run()
+	started, err := startHeld(g.job, g.cmd)
 	switch {
-	case err == nil:
-		return nil
-	case !assigned:
+	case !started:
+		return errors.Join(err, g.stop())
+	case err != nil:
 		return errors.Join(err, g.cmd.Process.Kill(), g.cmd.Wait(), g.stop())
 	}
-	return errors.Join(err, g.stop(), g.cmd.Wait())
+	if err := g.run(); err != nil {
+		return errors.Join(err, g.stop(), g.cmd.Wait())
+	}
+	return nil
 }
 
-// run assigns the started child to the job and resumes it, holding the lock cancel takes. os/exec
-// calls cancel from a goroutine of its own as soon as the child has started, so the context's end
-// comes before the child is in the job, or once it runs there, and never between, where the job's
-// end would leave no thread to resume. When it came before, the child is ended here, before it
-// runs, and the run goes on to reap it as a run its context ended.
-func (g *group) run() (assigned bool, err error) {
+// run resumes the started child, in the job, holding the lock cancel takes. os/exec calls cancel
+// from a goroutine of its own as soon as the child has started, so the context's end comes before
+// the child is resumed, or once it runs there, and never between, where the job's end would leave
+// no thread to resume. When it came before, the job is ended here, which ends the child, suspended
+// in it: a cancel that came before the child was assigned ended a job that held nothing yet. The run
+// goes on to reap it as a run its context ended.
+func (g *group) run() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.cut {
-		if err := g.cmd.Process.Kill(); err != nil {
-			return false, fmt.Errorf("proc: ending the child, whose context ended before it ran: %w", err)
+		if err := windows.TerminateJobObject(g.job, 1); err != nil {
+			return fmt.Errorf("proc: ending the child's job, whose context ended before the child ran: %w", err)
 		}
-		return false, nil
+		return nil
 	}
-	if err := assign(g.job, g.cmd); err != nil {
+	err := resume(uint32(g.cmd.Process.Pid)) //nolint:gosec // G115: a Windows pid is a DWORD, which os keeps as an int
+	g.running = err == nil
+	return err
+}
+
+// startHeld starts cmd, which its SysProcAttr makes suspended, and assigns it to job, which ends
+// what is in it when its last handle closes, as the first call after the start returns: no lock, no
+// snapshot and no other call comes between. Run's start and Start's both start so. From that call
+// on, a caller killed leaves nothing: its handle of job closes as it dies, and job ends the process,
+// suspended or not. A caller killed in the window before, from CreateProcess inside exec's Start to
+// the assignment, leaves the process suspended with no parent, in no job of its own; os/exec gives no
+// way to start it inside job, and the start that would leave no window, a stub made suspended in job
+// by CreateProcess's job list and the program started by exec with the stub as its parent
+// (SysProcAttr.ParentProcess), is not taken: security tools flag a parent set so as a spoofed
+// parent, and the program's parent pid would name the ended stub, not the caller. started is whether
+// cmd started; an error with it is a process not in job, suspended, which the caller ends and reaps.
+func startHeld(job windows.Handle, cmd *process) (started bool, err error) {
+	if err := cmd.Start(); err != nil {
 		return false, err
 	}
-	err = resume(uint32(g.cmd.Process.Pid)) //nolint:gosec // G115: a Windows pid is a DWORD, which os keeps as an int
-	g.running = err == nil
-	return true, err
+	return true, assign(job, cmd)
 }
 
 // assign assigns the started child of cmd to job.

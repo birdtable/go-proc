@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -49,7 +50,7 @@ import (
 //   - lift-hog <mib>: tries to lift the memory limit of each job it is in, by the job handles its
 //     parent holds, then allocates mib MiB (liftHog).
 //
-// and consoleModes's and graceModes's.
+// and heldModes's, consoleModes's and graceModes's.
 func systemHelper(mode string, args []string) (int, bool) {
 	switch {
 	case mode == "pipe-nested" && len(args) == 2:
@@ -89,7 +90,7 @@ func systemHelper(mode string, args []string) (int, bool) {
 		}
 		return liftHog(mib), true
 	}
-	return consoleModes(mode, args)
+	return heldModes(mode, args)
 }
 
 // testsJobStandIn is the tests-job helper. It is a helper, so startTestProcess would start plainly
@@ -686,4 +687,100 @@ func brkNoWindow() int {
 		}
 	}
 	return wrote(fmt.Fprintf(os.Stdout, "%s\n", said))
+}
+
+// heldModes runs the helper modes of a start whose caller a test kills, and consoleModes's, and
+// says whether mode is one:
+//
+//   - detach-at <stage> <binary>: starts a tree by detachWith whose leader is outlive with this
+//     helper's pid and binary, its output this helper's stdout; at the startStage named stage it
+//     writes "held " and the leader's pid and a newline, and holds there while holdWhile does.
+//   - outlive <pid> <binary>: waits for process pid to end, writes "outlived " and its own pid and a
+//     newline, then holds while holdWhile does.
+//   - race <start|run> <binary>: writes "go" and a newline, then starts a holding helper by
+//     detachWith (start), which writes "guarded ", the leader's pid, a space and the time since the
+//     go, and a newline once the leader is in its guard, and holds once the tree is whole, before
+//     detachWith returns; or by Run (run), as runner does.
+func heldModes(mode string, args []string) (int, bool) {
+	switch {
+	case mode == "detach-at" && len(args) == 2:
+		return detachAt(startStage(args[0]), args[1]), true
+	case mode == "outlive" && len(args) == 2:
+		return outlive(args[0], args[1]), true
+	case mode == "race" && len(args) == 2:
+		return race(args[0], args[1]), true
+	}
+	return consoleModes(mode, args)
+}
+
+// detachAt is the detach-at helper.
+func detachAt(stage startStage, binary string) int {
+	exe, err := os.Executable()
+	if err != nil {
+		return wrote(0, err)
+	}
+	cmd := exec.Command(exe, helperMode+"outlive", strconv.Itoa(os.Getpid()), binary) //nolint:gosec,noctx // the test binary itself, as a helper; the tree outlives every context
+	cmd.Env, cmd.Stdout, cmd.Stderr = Bare(), os.Stdout, os.Stdout
+	code := 0
+	_, err = detachWith(cmd, func(s startStage, pid int) {
+		if s != stage {
+			return
+		}
+		if code = wrote(fmt.Fprintf(os.Stdout, "held %d\n", pid)); code == 0 {
+			code = holdWhile(binary)
+		}
+	})
+	if err != nil {
+		return wrote(0, err)
+	}
+	return code
+}
+
+// outlive is the outlive helper.
+func outlive(starter, binary string) int {
+	pid, err := strconv.Atoi(starter)
+	if err != nil {
+		return wrote(0, fmt.Errorf("the starter's pid %q: %w", starter, err))
+	}
+	end, err := processEnd(pid)
+	if err != nil {
+		return wrote(0, err)
+	}
+	if err := <-end; err != nil {
+		return wrote(0, err)
+	}
+	if code := wrote(fmt.Fprintf(os.Stdout, "outlived %d\n", os.Getpid())); code != 0 {
+		return code
+	}
+	return holdWhile(binary)
+}
+
+// race is the race helper.
+func race(kind, binary string) int {
+	exe, err := os.Executable()
+	if err != nil {
+		return wrote(0, err)
+	}
+	if code := wrote(os.Stdout.WriteString("go\n")); code != 0 {
+		return code
+	}
+	switch kind {
+	case "start":
+		cmd := exec.Command(exe, helperMode+"hold-while", binary) //nolint:gosec,noctx // the test binary itself, as a helper; the tree outlives every context
+		cmd.Env = Bare()
+		begun := time.Now()
+		_, err = detachWith(cmd, func(s startStage, pid int) {
+			switch s {
+			case stageGuarded:
+				_, _ = fmt.Fprintf(os.Stdout, "guarded %d %s\n", pid, time.Since(begun)) // a line not written is a run the test counts without its time
+			case stageFreed:
+				_ = holdWhile(binary) // the test kills this helper here, or the binary's end ends it
+			}
+		})
+		return wrote(0, err)
+	case "run":
+		_, err = runner("hold-while", binary)
+		return wrote(0, err)
+	}
+	return wrote(0, fmt.Errorf("race of %q, want start or run", kind))
 }

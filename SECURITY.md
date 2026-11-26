@@ -39,6 +39,9 @@ not a jail. These are documented, and not a vulnerability on their own:
 - on Windows, a process that a system service starts on a child's behalf (WMI, Task Scheduler);
 - on Windows, a process of the tree that duplicates its job's handle from the caller, which keeps
   the job, and itself, alive after the caller exits, and lets it allow breakaway, clear
-  kill-on-close or lift the job's limits.
+  kill-on-close or lift the job's limits;
+- on Windows, a process that `Run` or `Start` made, left suspended with no parent and in no job that
+  ends it, when the caller is killed after Windows makes the process, inside `os/exec`'s start, and
+  before the next call puts it in its job.
 
 If you find a way around a bound the docs say *is* held, that is one.
