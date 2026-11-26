@@ -31,9 +31,10 @@ reads nothing and exits 0, so a program behind the block starts no other program
 outside them, a shell's command among them, and a link on the path swapped after the walk fails
 closed, with the system sandbox's exit 71. There RunHolding reads a #! script's first line, with no
 lookup, as the kernel reads it, to the first newline or #, and refuses a script whose interpreter
-is outside the folders; a program env finds is held when env runs it. A file with neither #! nor a
-program's format, which the kernel refuses and execvp runs with /bin/sh, is refused the same way
-unless /bin is named.
+is outside the folders; a program env finds is held when env runs it. A file that may run with
+neither #! nor a program's format, which the kernel refuses and execvp runs with /bin/sh, is
+refused the same way unless /bin is named. A file with no execute bit, which the kernel refuses
+before any shell or interpreter, is refused whatever its first line.
 
 ## What the block does not close
 

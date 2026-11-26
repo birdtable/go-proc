@@ -28,9 +28,11 @@ import (
 // after RunHolding has exec'd the sandbox, with its exit 71, which a program could give too, and a
 // link changed after the walk fails there, closed. So on macOS RunHolding refuses such a link
 // first, naming it, and reads a #! script's first line and holds the interpreter it names as it
-// holds a program, with no lookup: a program env finds is held when env runs it. A file that is
-// neither a #! script nor a Mach-O program the kernel refuses with ENOEXEC, and sandbox-exec's
-// execvp runs it with /bin/sh instead, so RunHolding holds /bin/sh for it the same way.
+// holds a program, with no lookup: a program env finds is held when env runs it. A file that may
+// run and is neither a #! script nor a Mach-O program the kernel refuses with ENOEXEC, and
+// sandbox-exec's execvp runs it with /bin/sh instead, so RunHolding holds /bin/sh for it the same
+// way. A file with no right to run, for anyone, the kernel refuses with EACCES before it reads the
+// file, and execvp runs no shell for it, so RunHolding refuses it first, whatever its first line.
 
 // walked is a program's path as the kernel follows it: each link it goes through, by its own
 // path, in order, and file, the real file it ends on.
@@ -193,12 +195,17 @@ func (n named) holdingProgram(prog string, w walked, rule programRule, dirs []st
 // IMG_SHSIZE.
 const maxShebang = 512
 
-// heldInterpreter is nil when the program prog, whose real file is file, is a Mach-O program, or
-// n holds the program that runs it as rule holds a program: a #! script's interpreter, or /bin/sh
-// for a file that is neither. Otherwise it is ErrUsage naming that program, or why it cannot be
-// told. It reads the file's first bytes alone and looks nothing up: a program that env finds is
-// held when env runs it, by the system sandbox.
+// heldInterpreter is nil when the program prog, whose real file is file, may run, and is a Mach-O
+// program or n holds the program that runs it as rule holds a program: a #! script's interpreter,
+// or /bin/sh for a file that is neither. Otherwise it is ErrUsage: for a file with no execute bit,
+// which the kernel refuses to run before any interpreter, as checkMac refuses sandbox-exec; naming
+// the program that runs it; or why that cannot be told. It reads the file's mode and first bytes
+// alone and looks nothing up: a program that env finds is held when env runs it, by the system
+// sandbox.
 func (n named) heldInterpreter(prog, file string, rule programRule) error {
+	if st, err := os.Stat(file); err == nil && st.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("the program %q may not run: its real file %q has no execute bit, and the kernel refuses to run such a file before any interpreter reads it: %w", prog, file, errUsage)
+	}
 	head, err := firstBytes(file)
 	if err != nil {
 		return heldf(prog, "its first line cannot be read: %v", err)

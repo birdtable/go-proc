@@ -89,13 +89,16 @@ func TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders(t *testing.T) {
 	}
 }
 
-// TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt: a file in the folder held with no #!
-// and no Mach-O format, which the kernel refuses with ENOEXEC and execvp then runs with /bin/sh, is
-// ErrUsage from RunHolding and Check, naming /bin/sh, before anything is set, unless /bin is held
-// too: then Check passes it and RunHolding runs it, exit 0.
+// TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt: a file in the folder held that may
+// run, with no #! and no Mach-O format, which the kernel refuses with ENOEXEC and execvp then runs
+// with /bin/sh, is ErrUsage from RunHolding and Check, naming /bin/sh, before anything is set,
+// unless /bin is held too: then Check passes it and RunHolding runs it, exit 0. The same file with
+// no execute bit, mode 0600, which the kernel refuses with EACCES before any shell, is ErrUsage
+// saying it may not run, with /bin held and without, and so is a #!/bin/sh script of mode 0600.
 //
 // What it costs when this fails: the file fails after the exec with the system sandbox's exit 71,
-// which a program could give too, in place of ErrUsage saying which folder it needs.
+// which a program could give too, in place of ErrUsage saying which folder it needs, or the
+// caller is told to hold all of /bin for a file no shell will run.
 func TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt(t *testing.T) {
 	t.Parallel()
 	dir := realTemp(t, "held", "report")
@@ -116,6 +119,35 @@ func TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt(t *testing.T) {
 	}
 	if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", plain, nil); code != 0 {
 		t.Errorf("RunHolding of a file that is no program, /bin held: exit %d, said %q; want 0", code, said)
+	}
+
+	locked, lockedScript := filepath.Join(held, "locked"), filepath.Join(held, "lockedscript")
+	for p, body := range map[string]string{locked: "exit 0\n", lockedScript: "#!/bin/sh\nexit 0\n"} {
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mayNot := func(prog string) string {
+		return `the program "` + prog + `" may not run: its real file "` + prog + `" has no execute bit`
+	}
+	for _, r := range []struct {
+		claim, prog string
+		folders     []string
+	}{
+		{"a file with no #! and no execute bit, /bin not held", locked, []string{held}},
+		{"a file with no #! and no execute bit, /bin held", locked, []string{held, "/bin"}},
+		{"a #!/bin/sh script with no execute bit, /bin not held", lockedScript, []string{held}},
+		{"a #!/bin/sh script with no execute bit, /bin held", lockedScript, []string{held, "/bin"}},
+	} {
+		if _, err := Check(Folders{ReadOnly: r.folders}, r.prog); !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || !strings.Contains(err.Error(), mayNot(r.prog)) {
+			t.Errorf("Check of %s: %v, want ErrUsage, never ErrNoBlock, and %q", r.claim, err, mayNot(r.prog))
+		}
+	}
+	if code, said := behindTheBlock(t, locked); code != childUsage || !strings.Contains(said, mayNot(locked)) {
+		t.Errorf("RunHolding of a file with no #! and no execute bit, /bin not held: exit %d, said %q; want exit %d and %q", code, said, childUsage, mayNot(locked))
+	}
+	if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", locked, nil); code != childUsage || !strings.Contains(said, mayNot(locked)) {
+		t.Errorf("RunHolding of a file with no #! and no execute bit, /bin held: exit %d, said %q; want exit %d and %q", code, said, childUsage, mayNot(locked))
 	}
 }
 
