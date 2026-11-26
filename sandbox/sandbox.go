@@ -68,6 +68,12 @@
 // is its owner's and its writers' to do, and so the caller's judgment of them, of the loader's and
 // the libraries' files as of the program's.
 //
+// The program is held as a file like any other: its real file, and on macOS every symbolic link on
+// its path and a #! script's interpreter, must be beneath a folder the caller named or the loader's
+// own folder, or it is ErrUsage naming the folder, which RunHolding never adds. The other folders
+// added come from the program's own bytes and never count toward holding it. The system sandbox
+// holds every exec too, so a program behind the block starts only programs beneath the folders.
+//
 // Every error of Run that says the block could not be set matches ErrNoBlock,
 // and a program that could not be started behind a block that was set does
 // not, so a caller tells the two apart with errors.Is, never by the text. So
@@ -97,7 +103,8 @@ import (
 
 // ErrUsage is Run or RunHolding given a program not named by its absolute
 // path, or a folder RunHolding or Check would not hold, or a program whose
-// load folders they cannot tell. Nothing is set or run.
+// load folders they cannot tell, or one the folders do not hold. Nothing is
+// set or run.
 var ErrUsage = errors.New("the block does not take it, so nothing is set or run")
 
 // ErrNoBlock is matched, with errors.Is, by every error of Run and Check that says the block could
@@ -197,8 +204,15 @@ func blockOn(goos string) Block {
 
 // Folders are the folders a program behind RunHolding's block may reach, each by its absolute path:
 // beneath ReadWrite it reads, runs, writes, makes and removes, and beneath ReadOnly it reads and
-// runs. Every other file is denied, reads included. The program itself is a file like any other, so
-// its folder is among them. The folders of its loader and libraries are not: RunHolding adds them.
+// runs. Every other file is denied, reads and runs included. The program itself is a file like any
+// other, so its folder is among them: the folder of its real file, the one its path ends on once
+// every symbolic link on it is followed, and on macOS the folder of each of those links and of a #!
+// script's interpreter too. RunHolding and Check walk the path and refuse with ErrUsage a program
+// these folders do not hold, naming the folder; they never add it. The system sandbox holds every
+// exec as well, Landlock on Linux and the profile on macOS, so a program behind the block starts
+// only programs beneath the folders held. The folders of its loader and libraries are not the
+// caller's: RunHolding adds them, read from the program's own bytes, and of them only the loader's
+// own folder counts toward holding the program.
 type Folders struct {
 	ReadWrite []string
 	ReadOnly  []string
@@ -207,8 +221,10 @@ type Folders struct {
 // RunHolding is Run with the program's files held to folders. It takes at least one folder: Run is
 // the block that leaves the files open. A folder that is not an absolute path, does not exist or is
 // not a folder, one named twice, under any name, and a read-only folder beneath a read-write one,
-// which could be written, are ErrUsage, and nothing is set or run. Every error that says the block
-// could not be set matches ErrNoBlock, as Run's.
+// which could be written, are ErrUsage, and nothing is set or run. So is a program whose real file
+// no folder reaches, or, on macOS, one whose path goes through a link in a folder none reaches, as
+// Folders says, once the load folders are added. Every error that says the block could not be set
+// matches ErrNoBlock, as Run's.
 //
 // To the folders it adds, read-only, those the program needs to load, which no caller names. On
 // Linux they are the folder of its loader and of each library it needs, by their real paths, as
@@ -231,19 +247,10 @@ func RunHolding(f Folders, path string, args, environ []string) error {
 	if err != nil {
 		return err
 	}
-	if n, err = loading(n, path); err != nil {
+	if n, err = program(n, path); err != nil {
 		return err
 	}
 	return runHere(n, path, argv, environ)
-}
-
-// loading is n with the folders the program at path needs to load, as this system answers them.
-func loading(n named, path string) (named, error) {
-	dirs, err := loadHere(path)
-	if err != nil {
-		return named{}, err
-	}
-	return n.with(dirs), nil
 }
 
 // with is n with each of dirs, real paths, held read-only, but one that is a folder of n's or
@@ -277,7 +284,7 @@ func Check(f Folders, path string) (Block, error) {
 			n, err = holding(f)
 		}
 		if err == nil {
-			n, err = loading(n, path)
+			n, err = program(n, path)
 		}
 		if err != nil {
 			return Block{}, err
@@ -776,10 +783,15 @@ const (
 
 // macosFiles is the clause that denies every file read and write, and macosRoot the one read it
 // gives back, the root folder's own list, without which the system sandbox cannot start a program.
-// The rest is granted beneath the folders alone.
+// The rest is granted beneath the folders alone. macosExec denies every exec, and the profile gives
+// back the exec of a file beneath a folder and of macNoop, the dry run's program: on macOS 27.2,
+// without it, a program behind the block starts any program on the machine, and with it a program
+// outside the folders, a link to one, and a #! script whose interpreter is outside exit 71 from the
+// system sandbox.
 const (
 	macosFiles = `(deny file-read* file-write*)`
 	macosRoot  = `(allow file-read-data (literal "/"))`
+	macosExec  = `(deny process-exec*)`
 )
 
 // macosHolding is the profile that holds the files to n, and the sandbox's -D parameters that carry
@@ -791,22 +803,24 @@ func macosHolding(n named) (string, []string) {
 		return macosProfile, nil
 	}
 	var params []string
+	var all strings.Builder
 	clause := func(rights, key string, dirs []string) string {
 		if len(dirs) == 0 {
 			return ""
 		}
 		var c strings.Builder
-		c.WriteString("(allow " + rights)
 		for i, d := range dirs {
 			name := key + strconv.Itoa(i)
 			params = append(params, "-D", name+"="+d)
 			c.WriteString(` (subpath (param "` + name + `"))`)
 		}
-		return c.String() + ")"
+		all.WriteString(c.String())
+		return "(allow " + rights + c.String() + ")"
 	}
 	ro := clause("file-read*", "RO", n.readOnly)
 	rw := clause("file-read* file-write*", "RW", n.readWrite)
-	return macosNetwork + macosFiles + macosRoot + ro + rw + macosRest, params
+	exec := macosExec + `(allow process-exec* (literal "` + macNoop + `")` + all.String() + ")"
+	return macosNetwork + macosFiles + macosRoot + ro + rw + exec + macosRest, params
 }
 
 // runMac is Run's macOS block through k, with the files held to n: the

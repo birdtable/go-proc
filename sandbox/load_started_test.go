@@ -12,32 +12,19 @@ import (
 // and returns the program's exit, or LoadChild's with why it did not run, and what it printed.
 func behindTheBlock(t *testing.T, prog string, leave ...string) (int, string) {
 	t.Helper()
+	return startedAs(t, loadChild, prog, leave...)
+}
+
+// startedAs is the test binary started as the caller mode names, for the program prog, with rest
+// after the report: its exit, and what it wrote to its report and its output.
+func startedAs(t *testing.T, mode, prog string, rest ...string) (int, string) {
+	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := realTemp(t)
-	report, outPath := filepath.Join(dir, "report"), filepath.Join(t.TempDir(), "out")
-	null, err := os.Open(os.DevNull)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = null.Close() }()
-	out, err := os.Create(outPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = out.Close() }()
-	args := append([]string{self, loadChild, prog, report}, leave...)
-	p, err := os.StartProcess(self, args, &os.ProcAttr{Env: []string{"PATH=/usr/bin:/bin"}, Files: []*os.File{null, out, out}}) //nolint:forbidigo // the row starts the test binary itself, as the process a caller sets the block on
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := p.Wait()
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := filepath.Join(realTemp(t), "report")
+	code, said := started(t, []string{"PATH=/usr/bin:/bin"}, append([]string{self, mode, prog, report}, rest...))
 	why, _ := os.ReadFile(report)
-	said, _ := os.ReadFile(outPath)
-	return st.ExitCode(), string(why) + string(said)
+	return code, string(why) + said
 }

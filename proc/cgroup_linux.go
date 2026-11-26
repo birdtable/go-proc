@@ -962,7 +962,7 @@ func (t *runCgroup) shimTookFrozen() error {
 // are the report, the environment and the go-ahead, a pipe and a memfd, which are neither, and none of
 // the Go runtime's: the runtime of a stage in a cgroup namespace opens the cpu.max it finds under the
 // cover and keeps it, a descriptor on a cgroup file system, unless the stage is started with GODEBUG
-// containermaxprocs=0 (shimRunEnv); those of the caller's that were not close-on-exec went at its exec. A thread or a descriptor that is gone is
+// containermaxprocs=0 (execSecondStage); those of the caller's that were not close-on-exec went at its exec. A thread or a descriptor that is gone is
 // gone; one that cannot be read is no pass.
 func (t *runCgroup) fdsOf(tid string) string {
 	dir := filepath.Join(t.proc, tid, "fd")

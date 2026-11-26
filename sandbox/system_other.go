@@ -14,4 +14,8 @@ func blockHere() Block { return Block{} }
 
 // loadHere is the folders a program needs to load on a system with no block: none, and the
 // program is not read, as runHere and checkHere refuse.
-func loadHere(string) ([]string, error) { return nil, nil }
+func loadHere(string, string) ([]string, error) { return nil, nil }
+
+// programHere is how a system with no block holds the program: not at all, and its path is not
+// walked, as runHere and checkHere refuse.
+func programHere() programRule { return programRule{} }

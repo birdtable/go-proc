@@ -1,5 +1,3 @@
-//go:build unix
-
 package gitenv_test
 
 import (
@@ -37,7 +35,11 @@ func without(environ, names []string) []string {
 // GIT_CONFIG_COUNT, runs under the environment as it is and under a list that leaves the config
 // names in, and does not run under Env, with or without ReadArgs: the first two are the control and
 // the planted list, red against the test, and the others are the block. The hook is a commit's
-// pre-commit, the monitor a status's fsmonitor.
+// pre-commit, the monitor a status's fsmonitor. Every row starts from the test process's own
+// environment, so PATH, and on Windows SystemRoot, are there: a program that does not run because
+// git found no shell to run it with is no block. On Windows the program is a #! script that Git for
+// Windows runs with its own sh, and the value is written with forward slashes, as git may hand
+// core.fsmonitor's value to that shell, which reads a backslash as an escape.
 //
 // What it costs when this fails: a git child of a caller that took the environment it was started in
 // runs a program a hook, a harness or a person named in a variable, with the caller's own rights.
@@ -61,8 +63,8 @@ func TestAProgramTheEnvironmentNamesRunsUnlessEnvDropsItsVariables(t *testing.T)
 			}
 		}
 		dir := repo(t, "a.txt")
-		vars := []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=" + kind.key, "GIT_CONFIG_VALUE_0=" + value}
-		naive := slices.Concat(who(), vars)
+		environ := slices.Concat(os.Environ(), []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=" + kind.key, "GIT_CONFIG_VALUE_0=" + filepath.ToSlash(value)})
+		naive := slices.Concat(environ, who())
 		for name, tc := range map[string]struct {
 			env  []string
 			args []string
@@ -71,8 +73,8 @@ func TestAProgramTheEnvironmentNamesRunsUnlessEnvDropsItsVariables(t *testing.T)
 			"the environment as it is":               {naive, slices.Concat([]string{"-C", dir}, kind.args), true},
 			"the nine names":                         {without(naive, nineNames()), slices.Concat([]string{"-C", dir}, kind.args), true},
 			"the nine names and ReadArgs":            {without(naive, nineNames()), gitenv.ReadArgs(dir, kind.args...), false},
-			"Env alone":                              {gitenv.Env(vars, who()...), slices.Concat([]string{"-C", dir}, kind.args), false},
-			"Env and ReadArgs":                       {gitenv.Env(vars, who()...), gitenv.ReadArgs(dir, kind.args...), false},
+			"Env alone":                              {gitenv.Env(environ, who()...), slices.Concat([]string{"-C", dir}, kind.args), false},
+			"Env and ReadArgs":                       {gitenv.Env(environ, who()...), gitenv.ReadArgs(dir, kind.args...), false},
 			"ReadArgs with the environment as it is": {naive, gitenv.ReadArgs(dir, kind.args...), false},
 		} {
 			ran++
@@ -96,7 +98,9 @@ func TestAProgramTheEnvironmentNamesRunsUnlessEnvDropsItsVariables(t *testing.T)
 
 // Each variable that points git at another repository, work tree, index or configuration, set,
 // changes what git reads from a folder, and under Env it changes nothing: git answers as it does with
-// no variable set. The control is git given the variable as it is, which answers differently.
+// no variable set. The control is git given the variable as it is, which answers differently. Each
+// run starts from the test process's own environment, and a git under Env with no variable that fails
+// and prints stops the test, as two failures alike would prove nothing.
 //
 // What it costs when this fails: a hook's GIT_DIR makes every folder a child reads answer as the
 // hook's repository, and a variable a harness left sets the configuration a child reads.
@@ -121,15 +125,18 @@ func TestEachVariableThatMovesGitChangesNothingUnderEnv(t *testing.T) {
 	} {
 		checked++
 		args := gitenv.ReadArgs(a, tc.probe...)
-		clean, _ := gitIn(t, gitenv.Env(nil, who()...), args...)
-		held, _ := gitIn(t, gitenv.Env([]string{tc.variable, "GIT_CONFIG_KEY_0=probe.key", "GIT_CONFIG_VALUE_0=leaked"}, who()...), args...)
+		clean, err := gitIn(t, gitenv.Env(os.Environ(), who()...), args...)
+		if err != nil && clean != "" {
+			t.Fatalf("%s: git failed under Env with no variable, so the case proves nothing: %v\n%s", name, err, clean)
+		}
+		held, _ := gitIn(t, gitenv.Env(slices.Concat(os.Environ(), []string{tc.variable, "GIT_CONFIG_KEY_0=probe.key", "GIT_CONFIG_VALUE_0=leaked"}), who()...), args...)
 		if held != clean {
 			t.Errorf("%s: under Env git answers %q, and %q with no variable", name, held, clean)
 		}
 		if name == "GIT_CONFIG_COUNT" {
 			continue
 		}
-		as, _ := gitIn(t, slices.Concat(who(), []string{tc.variable}), append([]string{"-C", a}, tc.probe...)...)
+		as, _ := gitIn(t, slices.Concat(os.Environ(), who(), []string{tc.variable}), append([]string{"-C", a}, tc.probe...)...)
 		if as == clean {
 			t.Errorf("%s: git answers %q as it is too, so the case proves nothing", name, as)
 		}

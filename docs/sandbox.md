@@ -13,6 +13,25 @@ process outside the block reads later, a shell's profile or a git hook beneath a
 is protected. A kernel at Landlock ABI 6 or later without erratum 2 is taken for one with no block,
 since go-landlock takes it for ABI 5 and cannot make the ruleset with the scopes.
 
+With RunHolding the program itself is held to the folders, as a file like any other. Its real file,
+where its path ends once each symbolic link on it is followed, must be beneath a folder the caller
+named or its loader's own folder, and on macOS so must each link on the way and a #! script's
+interpreter. RunHolding and Check walk the path before anything is set and refuse a program the
+folders do not hold with ErrUsage, naming the folder it would need; they never add that folder,
+since it would widen the block. The other load folders RunHolding adds come from the program's own
+bytes, its run path and the libraries it names, so they never count toward holding the program: a
+bundled tool whose $ORIGIN run path, or a library it names by its full path, would put its own
+folder among them is refused unless the caller names that folder.
+
+The system sandbox holds every exec too, so the walk only says before the run what the kernel would
+refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
+every exec but of a file beneath the folders, so a program behind the block starts no program
+outside them, a shell's command among them, and a link on the path swapped after the walk fails
+closed, with the system sandbox's exit 71. There RunHolding reads a #! script's first line, with no
+lookup, and refuses a script whose interpreter is outside the folders; a program env finds is held
+when env runs it. A file with neither #! nor a program's format is run by /bin/sh, which then
+needs its folder named.
+
 ## What the block does not close
 
 
@@ -33,7 +52,8 @@ since go-landlock takes it for ABI 5 and cannot make the ruleset with the scopes
     LD_LIBRARY_PATH, LD_PRELOAD or LD_AUDIT finds is not found, and neither is one a program opens
     by dlopen once it runs: its folder is the caller's to name. On macOS name the program by its
     real path, since a link on the way to it outside the folders (/var, /tmp and /etc are links)
-    cannot be followed, and a library outside dyld's shared cache is the caller's to name.
+    cannot be followed, and RunHolding refuses it with ErrUsage; a library outside dyld's shared
+    cache, and the folder of each program it starts, /bin for a shell, are the caller's to name.
   - The block takes no user namespace and no mount namespace, so a program sees every file's real
     owner, and it scrubs no *_SOCK or *_HOST variable from the environment: a variable only names a
     socket, which the block refuses.
