@@ -643,7 +643,12 @@ func TestTheSandboxHoldsTheProgramToTheConsumersFolders(t *testing.T) {
 		t.Errorf("Run of a program by a relative path: %v, want ErrUsage naming it, with no -- and no command", err)
 	}
 	in, out := t.TempDir(), t.TempDir()
-	block, err := sandbox.Check(sandbox.Folders{ReadWrite: []string{in}}, exe)
+	// The program is a file like any other, so the consumer names its folder, by its real path.
+	realExe, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := sandbox.Check(sandbox.Folders{ReadWrite: []string{in}, ReadOnly: []string{filepath.Dir(realExe)}}, realExe)
 	if errors.Is(err, sandbox.ErrNoBlock) {
 		if block != (sandbox.Block{}) {
 			t.Errorf("no block, yet Check says it closes %+v", block)

@@ -81,7 +81,7 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 		return p
 	}
 	prog, falseProg := resolved("true"), resolved("false")
-	dirs, err := loadHere(prog)
+	dirs, err := loadHere(prog, prog)
 	if err != nil {
 		t.Fatalf("the load folders of %s: %v", prog, err)
 	}

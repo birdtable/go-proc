@@ -17,7 +17,7 @@ import (
 // shared cache, and every program a caller holds to its folders no longer starts.
 func TestAProgramLinkedAgainstLibSystemStartsBehindTheBlockWithItsOwnFolderAlone(t *testing.T) {
 	t.Parallel()
-	if dirs, err := loadHere("/usr/bin/true"); err != nil || len(dirs) != 0 {
+	if dirs, err := loadHere("/usr/bin/true", "/usr/bin/true"); err != nil || len(dirs) != 0 {
 		t.Errorf("the load folders of /usr/bin/true on macOS: %q, %v, want none", dirs, err)
 	}
 	for prog, want := range map[string]int{"/usr/bin/true": 0, "/usr/bin/false": 1} {

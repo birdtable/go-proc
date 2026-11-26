@@ -280,15 +280,18 @@ func TestEachFileStepOfTheLinuxBlockThatFailsRefusesTheRun(t *testing.T) {
 // profile denies every file read and write, gives back the root folder's own
 // list, and grants reading beneath each read-only folder and reading and
 // writing beneath each read-write one, each by a (param ...) the sandbox's
-// -D sets, the network, ioctl and mach-lookup clauses kept whole. Without
-// folders the profile is the one that leaves the files open, with no
-// parameter.
+// -D sets; it denies every exec and gives back the exec of a file beneath
+// any folder, by the same parameters, and of the dry run's /usr/bin/true;
+// the network, ioctl and mach-lookup clauses are kept whole. Without folders
+// the profile is the one that leaves the files open, with no parameter.
 //
 // What it costs when this fails: the profile leaves the files open, grants a folder more than its list,
-// or carries a folder's name in its text, where a name could change what it allows.
+// carries a folder's name in its text, where a name could change what it allows, or lets a program
+// behind the block start a program outside the folders.
 func TestTheMacBlockHoldingFilesPassesEachFolderAsAParameter(t *testing.T) {
 	t.Parallel()
 	head := `(version 1)(allow default)(deny network*)(deny file-read* file-write*)(allow file-read-data (literal "/"))`
+	exec := `(deny process-exec*)(allow process-exec* (literal "/usr/bin/true")`
 	tail := `(deny file-ioctl (ioctl-command #x80017472))(deny mach-lookup)(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))(deny mach-priv-task-port)`
 	rows := []struct {
 		claim   string
@@ -298,13 +301,14 @@ func TestTheMacBlockHoldingFilesPassesEachFolderAsAParameter(t *testing.T) {
 	}{
 		{"no folder", named{}, `(version 1)(allow default)(deny network*)` + tail, nil},
 		{"read-write and read-only", named{readWrite: []string{"/w1", "/w2"}, readOnly: []string{"/r"}},
-			head + `(allow file-read* (subpath (param "RO0")))(allow file-read* file-write* (subpath (param "RW0")) (subpath (param "RW1")))` + tail,
+			head + `(allow file-read* (subpath (param "RO0")))(allow file-read* file-write* (subpath (param "RW0")) (subpath (param "RW1")))` +
+				exec + ` (subpath (param "RO0")) (subpath (param "RW0")) (subpath (param "RW1")))` + tail,
 			[]string{"-D", "RO0=/r", "-D", "RW0=/w1", "-D", "RW1=/w2"}},
 		{"read-write alone", named{readWrite: []string{"/w"}},
-			head + `(allow file-read* file-write* (subpath (param "RW0")))` + tail,
+			head + `(allow file-read* file-write* (subpath (param "RW0")))` + exec + ` (subpath (param "RW0")))` + tail,
 			[]string{"-D", "RW0=/w"}},
 		{"read-only alone", named{readOnly: []string{"/r1", "/r2"}},
-			head + `(allow file-read* (subpath (param "RO0")) (subpath (param "RO1")))` + tail,
+			head + `(allow file-read* (subpath (param "RO0")) (subpath (param "RO1")))` + exec + ` (subpath (param "RO0")) (subpath (param "RO1")))` + tail,
 			[]string{"-D", "RO0=/r1", "-D", "RO1=/r2"}},
 	}
 	for _, r := range rows {

@@ -356,14 +356,25 @@ type search struct {
 // for, which the block refuses itself. A file that is no ELF file, a #! script, a loader the
 // search does not know, a list with a $NAME it does not know or a folder that is not an absolute
 // path, a library that is not found and a search over its bounds are ErrUsage, naming the file.
+// The first folder is the loader's own; the rest come from the program's bytes and its libraries'.
 func loadFolders(files loadFiles, arch, prog string) ([]string, error) {
-	names, ok := loadersOf(arch)
-	if !ok {
+	if _, ok := loadersOf(arch); !ok {
 		return nil, nil
 	}
 	resolved, err := files.resolve(prog)
 	if err != nil {
 		return nil, noLoadf(prog, "it cannot be found: %v", err)
+	}
+	return loadFoldersOf(files, arch, prog, resolved)
+}
+
+// loadFoldersOf is loadFolders for the program prog whose real file is resolved, as RunHolding's
+// walk of its path found it, so the folders held and the folders it loads from are told of one
+// file, never of two reads of the path.
+func loadFoldersOf(files loadFiles, arch, prog, resolved string) ([]string, error) {
+	names, ok := loadersOf(arch)
+	if !ok {
+		return nil, nil
 	}
 	o, err := files.object(resolved)
 	if err != nil {
