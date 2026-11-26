@@ -168,7 +168,16 @@ func shimSteps(report int, at, argv []string, try func(func() error) error) (byt
 			return shimExec, err
 		}
 	}
-	return shimExec, syscall.Exec("/proc/self/exe", slices.Concat([]string{shimRun, strconv.Itoa(report), at[3]}, argv), shimRunEnv) //nolint:forbidigo,gosec // G204: the shim's own exec, of itself, behind what was just set
+	return shimExec, execSecondStage(syscall.Exec, report, at[3], argv) //nolint:forbidigo // the shim's own exec, of itself, behind what was just set
+}
+
+// execSecondStage is the first stage's exec of the second through exec, syscall.Exec in the shim:
+// this binary by its proc's self/exe, with shimRun as its argv[0], then the report's descriptor,
+// path, the program's, and argv, and with shimRunEnv as its whole environment. It returns only when the exec
+// fails. A test reads what the stage is given by passing an exec of its own, so the environment is
+// held on any Linux, and not only on a host that delegates cpu.
+func execSecondStage(exec func(argv0 string, argv, envv []string) error, report int, path string, argv []string) error {
+	return exec("/proc/self/exe", slices.Concat([]string{shimRun, strconv.Itoa(report), path}, argv), shimRunEnv)
 }
 
 // shimRunEnv is the whole environment of the shim's second stage: since Go 1.25 the Go runtime of a
