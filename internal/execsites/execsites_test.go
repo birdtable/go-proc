@@ -19,12 +19,16 @@ const root = "../.."
 
 // execPackages is each package whose Exec replaces the process's image, by its import path, with
 // the name a file gives it when it gives none.
-var execPackages = map[string]string{"syscall": "syscall", "golang.org/x/sys/unix": "unix"} //nolint:gochecknoglobals // a constant table the rows read
+func execPackages() map[string]string {
+	return map[string]string{"syscall": "syscall", "golang.org/x/sys/unix": "unix"}
+}
 
 // execFuncs is each exec of the module's own, by the folder of the package that declares it: the
 // sandbox's spawnExec, the macOS block's posix_spawn with POSIX_SPAWN_SETEXEC, which execs whatever
 // program it is given. Being unexported, it is named only in its own package.
-var execFuncs = map[string]string{"sandbox": "spawnExec"} //nolint:gochecknoglobals // a constant table the rows read
+func execFuncs() map[string]string {
+	return map[string]string{"sandbox": "spawnExec"}
+}
 
 // want is each exec the module has: the shim's of its second stage and of the program, and the
 // sandbox block's of the program on Linux and on macOS, where spawnExec execs it and syscall.Exec is
@@ -93,7 +97,7 @@ func fileSites(path, rel string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		name, ok := execPackages[imp]
+		name, ok := execPackages()[imp]
 		if !ok {
 			continue
 		}
@@ -109,7 +113,7 @@ func fileSites(path, rel string) ([]string, error) {
 			names[local] = name
 		}
 	}
-	own := execFuncs[pathpkg.Dir(rel)] // the exec of the module's own this file's package declares, if any
+	own := execFuncs()[pathpkg.Dir(rel)] // the exec of the module's own this file's package declares, if any
 	if len(names) == 0 && own == "" {
 		return out, nil
 	}
