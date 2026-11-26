@@ -1,3 +1,0 @@
-kind: Security
-body: 'proc: on Windows, `Start` and `Run` put the process they start in a job that ends it as the first call after the start returns, before anything else. A caller killed before a detached tree is whole no longer leaves the leader suspended with no parent: the leader starts in an unnamed guard job set to kill on close, which is lifted once the leader is in its tree''s job and resumed. A caller killed between Windows making the process, inside `os/exec`''s start, and that first call still leaves it suspended; proc''s docs and SECURITY.md say so.'
-time: 2026-11-26T04:31:00.000000+00:00
