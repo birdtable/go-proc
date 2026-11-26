@@ -15,7 +15,11 @@
 # build and module caches warm), times a factor of 2, rounded up to whole seconds:
 # 50.6 s, 50.9 s and 51.2 s of CPU at loads 11.1, 13.7 and 19.5, so 103. A push that changes a package
 # reruns its tests, so the row is measured with all of them run, not replayed from the cache. A run past it
-# after a cache clear or a toolchain or module bump is read before anyone raises it.
+# after a cache clear or a toolchain or module bump is read before anyone raises it. The row stays warm: at
+# 3737736 three runs on an empty build cache (a fresh GOCACHE each) used 432.0 s, 434.2 s and 434.2 s, and
+# three warm ones 77.7 s, 49.7 s and 49.2 s, the first just after the cold runs. A row over a cold run would
+# let a warm push grow eightfold unseen, so on a red gate/budget.sh names a cold cache, and a second push
+# reads warm.
 host: Darwin-arm64
 pre-commit-floor: 1.18
 pre-commit-budget: 2
