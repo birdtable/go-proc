@@ -16,28 +16,8 @@ func behindTheBlock(t *testing.T, prog string, leave ...string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := realTemp(t)
-	report, outPath := filepath.Join(dir, "report"), filepath.Join(t.TempDir(), "out")
-	null, err := os.Open(os.DevNull)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = null.Close() }()
-	out, err := os.Create(outPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = out.Close() }()
-	args := append([]string{self, loadChild, prog, report}, leave...)
-	p, err := os.StartProcess(self, args, &os.ProcAttr{Env: []string{"PATH=/usr/bin:/bin"}, Files: []*os.File{null, out, out}}) //nolint:forbidigo // the row starts the test binary itself, as the process a caller sets the block on
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := p.Wait()
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := filepath.Join(realTemp(t), "report")
+	code, said := started(t, []string{"PATH=/usr/bin:/bin"}, append([]string{self, loadChild, prog, report}, leave...))
 	why, _ := os.ReadFile(report)
-	said, _ := os.ReadFile(outPath)
-	return st.ExitCode(), string(why) + string(said)
+	return code, string(why) + said
 }

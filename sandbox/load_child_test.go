@@ -56,3 +56,27 @@ func LoadChild(args []string) (int, bool) {
 	}
 	return childFailed, true
 }
+
+// holdChild is the first argument that makes the test binary a caller of RunHolding with folders the
+// live row names, in a process of its own, which the block is set on.
+const holdChild = "sandbox-hold-child"
+
+// HoldChild is the test binary as the live row's caller, which TestMain asks with the process's
+// arguments after LoadChild: holdChild, a report, a read-only folder, a program and its arguments.
+// It holds the program to the report's folder, read-write, and to the read-only folder and the
+// program's own folder, read-only, and runs it by RunHolding with no environment. It returns only
+// when the program did not run: the error is written to the report, and the exit is childUsage for
+// ErrUsage and childFailed for any other.
+func HoldChild(args []string) (int, bool) {
+	if len(args) < 5 || args[1] != holdChild {
+		return 0, false
+	}
+	report, readOnly, prog := args[2], args[3], args[4]
+	f := Folders{ReadWrite: []string{filepath.Dir(report)}, ReadOnly: []string{readOnly, filepath.Dir(prog)}}
+	err := RunHolding(f, prog, args[5:], nil)
+	_ = os.WriteFile(report, []byte(fmt.Sprint(err)), 0o600)
+	if errors.Is(err, ErrUsage) {
+		return childUsage, true
+	}
+	return childFailed, true
+}
