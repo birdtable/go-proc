@@ -1,6 +1,7 @@
 package execsites
 
 import (
+	"cmp"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -53,14 +54,34 @@ func want() []string {
 }
 
 // sites is each reference to an Exec of execPackages, to an exec of execFuncs outside its own
-// declaration, or to a name of heldNames outside its one file, in the non-test Go files beneath top, as "<file> <enclosing function> <name>", sorted:
-// a call, or the function handed on as a value, once for each time it is named. A reference outside
-// every function is "(top level)", and a file that imports one of the packages by "." is listed by
-// that import, as its Exec cannot be told from another name. Every file is read, whatever system or
-// tag it builds for; testdata, dot folders and a folder that is a module of its own are not the
-// module's. A raw execve, Syscall(SYS_EXECVE, ...), is not listed: the raw-syscall lint row keeps
-// it to a file built for one system, and review holds the rest.
+// declaration, or to a name of heldNames outside its one file, in the module's non-test Go files
+// beneath top, as goFiles lists them, as "<file> <enclosing function> <name>", sorted: a call, or
+// the function handed on as a value, once for each time it is named. A reference outside every
+// function is "(top level)", and a file that imports one of the packages by "." is listed by that
+// import, as its Exec cannot be told from another name. A raw execve, Syscall(SYS_EXECVE, ...), is
+// not listed: the raw-syscall lint row keeps it to a file built for one system, and review holds the
+// rest.
 func sites(top string) ([]string, error) {
+	files, err := goFiles(top, false)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, rel := range files {
+		found, err := fileSites(filepath.Join(top, filepath.FromSlash(rel)), rel)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, found...)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// goFiles is each of the module's Go files beneath top, by its path from top with forward slashes,
+// its test files only when tests is true. Every file is listed, whatever system or tag it builds for;
+// testdata, dot folders and a folder that is a module of its own are not the module's.
+func goFiles(top string, tests bool) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(top, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -78,19 +99,95 @@ func sites(top string) ([]string, error) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+		if !strings.HasSuffix(p, ".go") || (!tests && strings.HasSuffix(p, "_test.go")) {
 			return nil
 		}
 		rel, err := filepath.Rel(top, p)
-		if err != nil {
-			return err
-		}
-		found, err := fileSites(p, filepath.ToSlash(rel))
-		out = append(out, found...)
+		out = append(out, filepath.ToSlash(rel))
 		return err
 	})
-	slices.Sort(out)
 	return out, err
+}
+
+// trampolineFile is the one file of the module that may call a libc function itself: the macOS
+// block's, sandbox/spawn_darwin.go, whose spawnExec is the block's exec.
+const trampolineFile = "sandbox/spawn_darwin.go"
+
+// trampolineFuncs is each function trampolineFile links from syscall to call a libc function at an
+// address: syscall6, and rawSyscall6, which makes the block's posix_spawn.
+func trampolineFuncs() []string {
+	return []string{"rawSyscall6", "syscall6"}
+}
+
+// trampolineDirectives is each directive that gives a file a function it could not otherwise call:
+// //go:linkname, which links a name to another package's unexported function, and
+// //go:cgo_import_dynamic, which imports a libc symbol for an assembly trampoline to jump to. Every
+// //go:linkname is held, whatever it names, as the functions that reach libc or the kernel by a link
+// are no closed list. The compiler refuses the other //go:cgo_ directives outside cgo's own files.
+func trampolineDirectives() []string {
+	return []string{"//go:linkname", "//go:cgo_import_dynamic"}
+}
+
+// trampolines is each reference to a function of trampolineFuncs, and each directive of
+// trampolineDirectives, in the module's Go files beneath top outside trampolineFile, test files
+// included, as "<file>:<line> <name or directive>", sorted by file and line: a call, or the function
+// handed on as a value. A field or method of that name is not one, nor is a directive's text inside a
+// string or after other text in a comment. A fixture that needs a directive lives in testdata.
+func trampolines(top string) ([]string, error) {
+	files, err := goFiles(top, true)
+	if err != nil {
+		return nil, err
+	}
+	type found struct {
+		file string
+		line int
+		what string
+	}
+	var all []found
+	for _, rel := range files {
+		if rel == trampolineFile {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(top, filepath.FromSlash(rel)), nil, parser.SkipObjectResolution|parser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range f.Comments {
+			for _, c := range g.List {
+				if fields := strings.Fields(c.Text); len(fields) > 0 && slices.Contains(trampolineDirectives(), fields[0]) {
+					all = append(all, found{rel, fset.Position(c.Slash).Line, fields[0]})
+				}
+			}
+		}
+		var visit func(ast.Node) bool
+		visit = func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.SelectorExpr: // a field or method of the name is not the function
+				ast.Inspect(n.X, visit)
+				return false
+			case *ast.StructType: // nor is a struct's field of that name; its type is read
+				for _, fl := range n.Fields.List {
+					ast.Inspect(fl.Type, visit)
+				}
+				return false
+			case *ast.Ident:
+				if slices.Contains(trampolineFuncs(), n.Name) {
+					all = append(all, found{rel, fset.Position(n.Pos()).Line, n.Name})
+				}
+			}
+			return true
+		}
+		ast.Inspect(f, visit)
+	}
+	slices.SortStableFunc(all, func(a, b found) int {
+		return cmp.Or(strings.Compare(a.file, b.file), cmp.Compare(a.line, b.line))
+	})
+	out := make([]string, 0, len(all))
+	for _, s := range all {
+		out = append(out, s.file+":"+strconv.Itoa(s.line)+" "+s.what)
+	}
+	return out, nil
 }
 
 // fileSites is sites for the one file at path, named rel.
@@ -300,6 +397,75 @@ func TestAPlantedExecIsListedByItsFileAndFunction(t *testing.T) {
 	}
 	if !slices.Equal(more, planted) || len(missing) > 0 {
 		t.Errorf("the sites want does not hold: %q, and those it holds that are missing: %q; want %q and none missing", more, missing, planted)
+	}
+}
+
+// TestOnlyTheBlocksSpawnCallsLibcItself: no Go file of the module but sandbox/spawn_darwin.go, test
+// files included, names syscall6 or rawSyscall6 or carries a //go:linkname or //go:cgo_import_dynamic
+// directive. Those are how that file calls libSystem's posix_spawn with no cgo, and how any other
+// file could make an exec of its own that names neither Exec nor spawnExec.
+//
+// What it costs when this fails: a file imports posix_spawn or execve and calls it through a
+// trampoline of its own, an exec the other rows do not list and lint does not ban, and only a
+// reading of the source would find it.
+func TestOnlyTheBlocksSpawnCallsLibcItself(t *testing.T) {
+	t.Parallel()
+	got, err := trampolines(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range got {
+		t.Errorf("a libc call or link outside %s: %s; make the call there, or hold the new file here with why", trampolineFile, s)
+	}
+}
+
+// TestAPlantedTrampolineIsListedByItsFileAndLine: in a scratch tree that holds sandbox/spawn_darwin.go,
+// a second darwin file of the sandbox that imports posix_spawn by //go:cgo_import_dynamic and calls
+// syscall6 is listed at both lines; so are a test file that links syscall.rawSyscall6 and hands
+// rawSyscall6 on as a value, and a //go:linkname to the runtime in another package. Not listed:
+// spawn_darwin.go's own, a plant in testdata, in a dot folder or in a module of its own, a directive's
+// text in a string or after other text in a comment, and a field of syscall6's name.
+//
+// What it costs when this fails: the row over the real tree passes a trampoline spelled another way,
+// and a new file reaches posix_spawn with nothing but review to hold it.
+func TestAPlantedTrampolineIsListedByItsFileAndLine(t *testing.T) {
+	t.Parallel()
+	top := t.TempDir()
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(trampolineFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plant(t, top, trampolineFile, string(b))
+	again := "//go:build darwin\n\npackage sandbox\n\n" +
+		"//go:cgo_import_dynamic libc_posix_spawn_again posix_spawn \"/usr/lib/libSystem.B.dylib\"\n\n" +
+		"var spawnAgainAddr uintptr\n\n" +
+		"func spawnAgain() uintptr {\n\tr, _, _ := syscall6(spawnAgainAddr, 0, 0, 0, 0, 0, 0)\n\treturn r\n}\n"
+	plant(t, top, "sandbox/again_darwin.go", again)
+	plant(t, top, "sandbox/link_test.go", "package sandbox\n\nimport _ \"unsafe\"\n\n"+
+		"//go:linkname zzRaw syscall.rawSyscall6\nfunc zzRaw(fn, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr)\n\n"+
+		"var zzSpawn = rawSyscall6\n")
+	plant(t, top, "proc/clock.go", "package proc\n\nimport _ \"unsafe\"\n\n//go:linkname nanotime runtime.nanotime\nfunc nanotime() int64\n")
+	plant(t, top, "sandbox/testdata/x.go", again)
+	plant(t, top, "sandbox/.hidden/x.go", again)
+	plant(t, top, "tools/gate/go.mod", "module gate\n")
+	plant(t, top, "tools/gate/x.go", again)
+	plant(t, top, "proc/text.go", "package proc\n\n// The block links syscall6 by a //go:linkname directive.\n"+
+		"var fixture = \"//go:linkname zz syscall.syscall6\"\n\n"+
+		"/*\n//go:cgo_import_dynamic in a block comment is no directive\n*/\n\n"+
+		"type held struct{ syscall6 bool }\n\nfunc (h held) on() bool { return h.syscall6 }\n")
+	got, err := trampolines(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planted := []string{
+		"proc/clock.go:5 //go:linkname",
+		"sandbox/again_darwin.go:5 //go:cgo_import_dynamic",
+		"sandbox/again_darwin.go:10 syscall6",
+		"sandbox/link_test.go:5 //go:linkname",
+		"sandbox/link_test.go:8 rawSyscall6",
+	}
+	if !slices.Equal(got, planted) {
+		t.Errorf("the trampolines listed: %q; want %q", got, planted)
 	}
 }
 

@@ -5,8 +5,16 @@
 // posix_spawn's trampoline, outside sandbox/spawn_darwin.go, and want none: rawSyscall6 calls it
 // from any file of the package without spawnExec. Lint bans both Execs, but a //nolint line passes
 // lint, and no lint row names spawnExec or spawnAddr, so only a reading of the source holds that no
-// other exec is added. A raw execve, Syscall(SYS_EXECVE, ...), is not held here: the raw-syscall
-// lint row keeps it to a file built for one system, and review holds the rest. Nor is the assembly
-// that sets spawnAddr, as the tests read only Go files; review holds it.
+// other exec is added.
+//
+// A file could also make an exec of its own: import posix_spawn or execve by //go:cgo_import_dynamic,
+// link syscall's rawSyscall6 by //go:linkname, and call it. So the tests also list each reference to
+// syscall6 and rawSyscall6, and each //go:linkname and //go:cgo_import_dynamic directive, in every Go
+// file of the module, test files included, outside sandbox/spawn_darwin.go, by file and line, and
+// want none. The compiler refuses the other //go:cgo_ directives outside cgo's own files.
+//
+// Not held here, and held by review: a raw execve, Syscall(SYS_EXECVE, ...), which the raw-syscall
+// lint row keeps to a file built for one system; assembly, as the tests read only Go files; and cgo,
+// an import of "C", which the sandbox's unsafe row refuses in kernel_linux.go alone.
 // It has no code of its own; its tests read the module's source.
 package execsites
