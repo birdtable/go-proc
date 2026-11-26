@@ -675,3 +675,11 @@ linters:
       - path: _(linux|darwin|windows)(_(amd64|arm64))?(_test)?\.go$|(^|/)sandbox/cmd/netblock/proof_test\.go$
         linters: [forbidigo]
         text: "raw-syscall:"
+      # tools/gate is the command Taskfile.yml calls in place of shell, a module of its own that the lint
+      # task lints on each system beside the module, by this file; no lint of the module loads its files,
+      # so each tools/gate row reaches them alone. By the process lead's ruling of 26 Nov, a row is one
+      # linter and one reason, and none excludes a file or a linter whole. go.errors.4: tools/gate/main.go
+      # is a command's main, the one exit.
+      - path: (^|/)tools/gate/main\.go$
+        linters: [forbidigo]
+        text: "go\\.errors\\.4:"
