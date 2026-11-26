@@ -712,3 +712,8 @@ linters:
       - path: (^|/)tools/gate/[^/]+\.go$
         linters: [forbidigo]
         text: "cli\\.config\\.3:"
+      # G204: tools/gate starts the tier's tools by the names and arguments its steps give, go, git and
+      # the binaries go tool -n names for the pinned tools; no shell reads them.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [gosec]
+        text: "G204:"
