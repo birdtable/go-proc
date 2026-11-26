@@ -692,3 +692,9 @@ linters:
       - path: (^|/)tools/gate/main\.go$
         linters: [forbidigo]
         text: "cli\\.errors\\.3:"
+      # cli.process.1: tools/gate starts the tier's own tools (go, git, the pinned linters, gotestsum,
+      # hatch). It is the tier's runner, not a library, and proc, the runner it would go through, is
+      # what it gates.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [depguard]
+        text: "cli\\.process\\.1:"
