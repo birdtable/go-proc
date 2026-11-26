@@ -42,6 +42,8 @@ not a jail. These are documented, and not a vulnerability on their own:
   kill-on-close or lift the job's limits;
 - on Windows, a process that `Run` or `Start` made, left suspended with no parent and in no job that
   ends it, when the caller is killed after Windows makes the process, inside `os/exec`'s start, and
-  before the next call puts it in its job.
+  before the next call puts it in its job. Measured on GitHub's `windows-latest` runner with the race
+  detector, that window is about 5 ms of a 6 ms start: of 100 callers each of `Start` and of `Run`
+  killed 0 to 9.9 ms after they began, 43 and 46 left a process so, every one killed 1.1 to 6.1 ms in.
 
 If you find a way around a bound the docs say *is* held, that is one.
