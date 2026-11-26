@@ -699,7 +699,8 @@ func brkNoWindow() int {
 //     newline, then holds while holdWhile does.
 //   - race <start|run> <binary>: writes "go" and a newline, then starts a holding helper by
 //     detachWith (start), which writes "guarded ", the leader's pid, a space and the time since the
-//     go, and a newline once the leader is in its guard, and holds once the tree is whole, before
+//     go, and a newline once the leader is in its guard, then "resumed" and a newline once it is
+//     resumed, before the guard is lifted, and holds once the tree is whole, before
 //     detachWith returns; or by Run (run), as runner does.
 func heldModes(mode string, args []string) (int, bool) {
 	switch {
@@ -773,6 +774,10 @@ func race(kind, binary string) int {
 			switch s {
 			case stageGuarded:
 				_, _ = fmt.Fprintf(os.Stdout, "guarded %d %s\n", pid, time.Since(begun)) // a line not written is a run the test counts without its time
+			case stageResumed:
+				// Written before the guard's kill on close is lifted: a leader the test finds after
+				// this line may outlive the kill, as a detached tree does, and is not judged.
+				_, _ = os.Stdout.WriteString("resumed\n") // one not written leaves the leader judged, and it outlives only after the write
 			case stageFreed:
 				_ = holdWhile(binary) // the test kills this helper here, or the binary's end ends it
 			}

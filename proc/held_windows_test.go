@@ -139,10 +139,11 @@ type raceOutcome struct {
 // TestACallerKilledAsItStartsLeavesNoProcessOnceItIsInItsJob: a caller of Start, or of Run, killed
 // as close after the start as the test can, at a delay that grows over raceRuns runs, leaves no
 // process once the process it started is in its guard job (Start) or its job (Run): a leader its
-// caller wrote was guarded has ended within endsWithin. A process a kill left in the window before,
-// from CreateProcess inside exec's Start to the assignment (startHeld), is counted, ended and
-// reported, with the time from the go to the guard, as proc's Windows docs say: the test fails on
-// none of those.
+// caller wrote was guarded, and not yet resumed, has ended within endsWithin. One resumed may
+// outlive the kill, as its guard may be lifted, and is not judged. A process a kill left in the
+// window before, from CreateProcess inside exec's Start to the assignment (startHeld), is counted,
+// ended and reported, with the time from the go to the guard, as proc's Windows docs say: the test
+// fails on none of those.
 //
 // What it costs when this fails: a caller killed as it starts leaves a process suspended with no
 // parent and no job to end it, from the guard on, which startHeld says it does not.
@@ -178,8 +179,9 @@ func spread(ds []time.Duration) string {
 }
 
 // raceOnce starts a race helper of kind, kills it delay after it says go, and says what the kill
-// left. A process the helper made that still runs endsWithin after the kill is an orphan, which is
-// ended; one the helper wrote was guarded fails the test.
+// left. A leader the helper wrote was guarded, and not resumed, that still runs endsWithin after the
+// kill fails the test; one it wrote was resumed is not judged. Any other process the helper made that
+// still runs orphanGrace after the kill is an orphan. Each is ended at the test's end.
 func raceOnce(t *testing.T, kind string, delay time.Duration) raceOutcome {
 	t.Helper()
 	exe, err := os.Executable()
@@ -215,25 +217,40 @@ func raceOnce(t *testing.T, kind string, delay time.Duration) raceOutcome {
 		t.Fatalf("reading what the race helper wrote: %v", err)
 	}
 	var o raceOutcome
-	guardedPid := 0
-	if word, values, ok := strings.Cut(strings.TrimSuffix(string(rest), "\n"), " "); ok && word == "guarded" {
-		pid, took, _ := strings.Cut(values, " ")
-		guardedPid, _ = strconv.Atoi(pid)
-		o.guarded, _ = time.ParseDuration(took)
-	} else if len(rest) > 0 {
-		t.Fatalf("the race helper wrote %q after go, want a guarded line or nothing", rest)
+	guardedPid, resumed := 0, false
+	for line := range strings.Lines(string(rest)) {
+		word, values, _ := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+		switch {
+		case word == "guarded" && guardedPid == 0 && !resumed:
+			pid, took, _ := strings.Cut(values, " ")
+			guardedPid, _ = strconv.Atoi(pid)
+			o.guarded, _ = time.ParseDuration(took)
+		case word == "resumed" && guardedPid != 0 && !resumed:
+			resumed = true
+		default:
+			t.Fatalf("the race helper wrote %q after go, want a guarded line, then a resumed line, or less", rest)
+		}
 	}
 	for pid, h := range childrenOf(t, caller.Process.Pid, ended, filepath.Base(exe)) {
-		if endsIn(t, h, endsWithin) {
-			continue
+		switch {
+		case pid == guardedPid && resumed:
+			// may outlive the kill once the guard is lifted, as a detached tree does; ended at the test's end
+		case pid == guardedPid:
+			if !endsIn(t, h, endsWithin) {
+				t.Errorf("%s: the process %d its caller had put in its guard still runs %v after the caller was killed, want it ended", kind, pid, endsWithin)
+			}
+		case !endsIn(t, h, orphanGrace):
+			o.orphan = true
 		}
-		if pid == guardedPid {
-			t.Errorf("%s: the process %d its caller had put in its guard still runs %v after the caller was killed, want it ended", kind, pid, endsWithin)
-		}
-		o.orphan = true
 	}
 	return o
 }
+
+// orphanGrace is how long after its caller's end a process the caller made, and wrote no guard for,
+// has to end before raceOnce counts it as left suspended with no job. One in its job is ended by the
+// job as the caller's handles close, before the caller's own end, so it ends within milliseconds; one
+// left in the window never ends, and a wait of endsWithin for each would cost the run minutes.
+const orphanGrace = 2 * time.Second
 
 // exitOf waits for the killed process c to end and gives when it did.
 func exitOf(t *testing.T, c *process) windows.Filetime {
