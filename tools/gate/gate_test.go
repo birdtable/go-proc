@@ -18,7 +18,7 @@ import (
 // take, passes and checks nothing.
 func TestRunRefusesAStepOrArgumentsItDoesNotKnow(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{nil, {"nope"}, {"lint", "x"}, {"layers", "x"}, {"test-short", "x"}, {"notice-check", "x"}, {"build", "x"}, {"psx"}, {"psx", "a", "b"}, {"namespace"}, {"namespace", "-nope", "./proc/"}} {
+	for _, args := range [][]string{nil, {"nope"}, {"lint", "x"}, {"layers", "x"}, {"test-short", "x"}, {"notice-check", "x"}, {"build", "x"}, {"lint-gate", "x"}, {"psx"}, {"psx", "a", "b"}, {"namespace"}, {"namespace", "-nope", "./proc/"}} {
 		var out, errs bytes.Buffer
 		if code := run(context.Background(), args, &out, &errs); code != 2 {
 			t.Errorf("run(%q) exited %d, and want 2: %s%s", args, code, &out, &errs)

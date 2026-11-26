@@ -5,13 +5,14 @@
 //	go -C tools/gate run . -top <the repository's top> <step> [arguments]
 //
 // and its steps are lint, layers, test-short, namespace, psx and notice-check, each the member of
-// that name, or for psx the first command of licenses; build, the build member's build of the gate
-// itself; and budget, each tier's budget step (budget.go says how). A step's exit is 0 when it holds,
-// 1 when it does not or could not finish, or when a line it wrote was not written, and 2 for
-// arguments it does not take. It is a module of its own, as the tools are, so that go-proc's go.mod,
-// its layer rows and task size leave it out; the vet, build and lint members read it for each system
-// as they read the module, by the top's .golangci.yml. Its own test is task taskfile's: Taskfile.yml
-// calls Go, by go-testkit's taskfile check.
+// that name, or for psx the first command of licenses; lint-gate and build, the gate-lint member and
+// the build member's build of the gate itself; and budget, each tier's budget step (budget.go says
+// how). A step's exit is 0 when it holds, 1 when it does not or could not finish, or when a line it
+// wrote was not written, and 2 for arguments it does not take. It is a module of its own, as the
+// tools are, so that go-proc's go.mod, its layer rows and task size leave it out; the push tier's
+// gate-vet, build and gate-lint members read it for each system as vet, build and lint read the
+// module, by the top's .golangci.yml. Its own test is task taskfile's: Taskfile.yml calls Go, by
+// go-testkit's taskfile check.
 package main
 
 import (
@@ -50,6 +51,7 @@ type step func(ctx context.Context, args []string, stdout, stderr io.Writer) err
 func steps() map[string]step {
 	return map[string]step{
 		"lint":         lintStep,
+		"lint-gate":    lintGateStep,
 		"layers":       layersStep,
 		"test-short":   testShortStep,
 		"namespace":    namespaceStep,
@@ -136,7 +138,7 @@ func runStep(ctx context.Context, all map[string]step, args []string, stdout, st
 		args = args[2:]
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "gate: a step is the first argument: lint, layers, test-short, namespace, psx, notice-check, build or budget")
+		fmt.Fprintln(stderr, "gate: a step is the first argument: lint, layers, test-short, namespace, psx, notice-check, lint-gate, build or budget")
 		return 2
 	}
 	s, ok := all[args[0]]
@@ -229,11 +231,25 @@ func report(stdout io.Writer, name string, systems []string, res []result) error
 // go over the module's ./... reads.
 const gateDir = "tools/gate"
 
-// lintStep is golangci-lint for each of the three systems, run together, as the lint member was, over
-// the module and over tools/gate, all six at once. tools/gate is linted by the top's .golangci.yml,
-// named, so no config of its own could take that one's place. Its lint's timeout is the member's.
+// lintStep is golangci-lint for each of the three systems, run together, as the lint member was. Its
+// lint's timeout is the member's.
 func lintStep(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err := noArgs("lint", args, stderr); err != nil {
+		return err
+	}
+	bin, err := tool(ctx, "golangci-lint")
+	if err != nil {
+		return err
+	}
+	systems := []string{"linux", "darwin", "windows"}
+	return report(stdout, "lint", systems, together(ctx, bin, "", systems, "run", "--allow-parallel-runners", "./..."))
+}
+
+// lintGateStep is golangci-lint of tools/gate for each of the three systems, run together, by the
+// top's .golangci.yml, named, so no config of its own could take that one's place. It is the push
+// tier's, not the commit tier's, as lint of the module is both.
+func lintGateStep(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if err := noArgs("lint-gate", args, stderr); err != nil {
 		return err
 	}
 	bin, err := tool(ctx, "golangci-lint")
@@ -245,14 +261,8 @@ func lintStep(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	systems := []string{"linux", "darwin", "windows"}
-	var mod, gate []result
-	var wg sync.WaitGroup
-	wg.Go(func() { mod = together(ctx, bin, "", systems, "run", "--allow-parallel-runners", "./...") })
-	wg.Go(func() {
-		gate = together(ctx, bin, filepath.FromSlash(gateDir), systems, "run", "--allow-parallel-runners", "--config", cfg, "./...")
-	})
-	wg.Wait()
-	return errors.Join(report(stdout, "lint", systems, mod), report(stdout, "lint "+gateDir, systems, gate))
+	return report(stdout, "lint "+gateDir, systems,
+		together(ctx, bin, filepath.FromSlash(gateDir), systems, "run", "--allow-parallel-runners", "--config", cfg, "./..."))
 }
 
 // buildStep is go build of tools/gate for each system and architecture the build member builds the

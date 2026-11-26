@@ -59,16 +59,12 @@ tasks:
   # vet also type-checks linux/mips64le, where syscall.Stat_t.Dev is 32 bits, not the 64 of every
   # system above: a compare of st.Dev with a uint64 that has no conversion then fails the tier, not a
   # consumer's build. Vet type-checks every file, so the
-  # build matrix need not take it. tools/gate, a module of its own that ./... does not read, is vetted
-  # on the same six, so a file of it built for one system alone fails here, on any host.
+  # build matrix need not take it.
   vet:
-    desc: go vet for each system, of the module and of tools/gate, and linux/mips64le for its 32-bit Stat_t.Dev
+    desc: go vet for each system, and linux/mips64le for its 32-bit Stat_t.Dev
     cmds:
       - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
         cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go vet ./...
-        timeout: 5m
-      - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
-        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go -C tools/gate vet ./...
         timeout: 5m
       - cmd: CGO_ENABLED=0 GOOS=linux GOARCH=mips64le go vet ./...
         timeout: 5m
@@ -104,12 +100,29 @@ tasks:
         timeout: 5m
 
   # lint's timeout is 20m: on a cold Windows release runner its three golangci-lint runs share 4 cores
-  # with the race tests, and 10m was too short there. It lints tools/gate on the three as well, by the
-  # top's .golangci.yml, whose This-repo rows for tools/gate are each one linter and one reason.
+  # with the race tests, and 10m was too short there.
   lint:
-    desc: golangci-lint for each of the three systems, of the module and of tools/gate, run together
+    desc: golangci-lint for each of the three systems, run together
     cmds:
       - cmd: '{{.GATE}} lint'
+        timeout: 20m
+
+  # gate-vet and gate-lint read tools/gate, a module of its own that no ./... of the module reads, for
+  # each system as vet and lint read the module, so a file of it built for one system alone fails the
+  # push tier on any host. gate-lint lints by the top's .golangci.yml, whose This-repo rows for
+  # tools/gate are each one linter and one reason. They are the push and release tiers' members, not
+  # the commit tier's, whose wall row is 2 s; build builds tools/gate too.
+  gate-vet:
+    desc: go vet of tools/gate for each system
+    cmds:
+      - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
+        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go -C tools/gate vet ./...
+        timeout: 5m
+
+  gate-lint:
+    desc: golangci-lint of tools/gate for each of the three systems, run together
+    cmds:
+      - cmd: '{{.GATE}} lint-gate'
         timeout: 20m
 
   # layers holds the layer rows of .golangci.yml red. Each planted package under
@@ -334,7 +347,7 @@ tasks:
 
   pre-push-members:
     desc: the push tier's members, which its budget step runs under hatch; alone, no claim of done
-    deps: [fmt, vet, lint, layers, workflows, secrets-staged, taskfile, build, api, size, test-short, { task: namespace, vars: { CACHED: "yes" } }, secrets, mod]
+    deps: [fmt, vet, lint, gate-vet, gate-lint, layers, workflows, secrets-staged, taskfile, build, api, size, test-short, { task: namespace, vars: { CACHED: "yes" } }, secrets, mod]
 
   # The release tier takes the push tier's members, with task test, the whole suite, in
   # place of test-short. It pins CACHED empty, as go-task otherwise reads it from the
@@ -352,4 +365,4 @@ tasks:
 
   release-members:
     internal: true
-    deps: [fmt, vet, lint, layers, workflows, secrets-staged, taskfile, build, api, test, { task: namespace, vars: { CACHED: "" } }, secrets, vuln, verify, licenses, notice-check, size, changelog]
+    deps: [fmt, vet, lint, gate-vet, gate-lint, layers, workflows, secrets-staged, taskfile, build, api, test, { task: namespace, vars: { CACHED: "" } }, secrets, vuln, verify, licenses, notice-check, size, changelog]
