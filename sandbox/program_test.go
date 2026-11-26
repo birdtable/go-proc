@@ -128,7 +128,7 @@ func TestTheWalkFollowsAProgramsPathAsTheKernelDoes(t *testing.T) {
 
 // TestRunHoldingHoldsTheProgramsRealFileAndOnMacOSEveryLinkOnItsPath: a program whose real file
 // no folder held reaches is ErrUsage naming that file's folder, whatever folder its link lies in;
-// one beneath a folder the caller named, or a load folder RunHolding added, passes. With linksHeld,
+// one beneath a folder the caller named, or its loader's own folder, passes. With linksHeld,
 // macOS's rule, a link on the path that no folder reaches is ErrUsage naming the link, though the
 // real file is held; without it, Linux's rule, the same path passes. The folders are never added
 // to.
@@ -148,7 +148,7 @@ func TestRunHoldingHoldsTheProgramsRealFileAndOnMacOSEveryLinkOnItsPath(t *testi
 	}{
 		{"a file in a folder named", walked{file: "/held/real"}, true, ""},
 		{"a file beneath a read-write folder", walked{file: "/rw/deep/x"}, true, ""},
-		{"a file in a load folder added", walked{file: "/lib/load/ld.so"}, true, ""},
+		{"a file in its loader's own folder", walked{file: "/lib/load/ld.so"}, true, ""},
 		{"a link in a folder named, to a file outside", walked{links: []string{"/held/t"}, file: "/other/true"}, false,
 			`it is the file "/other/true", whose folder "/other" no folder held reaches`},
 		{"the same on macOS", walked{links: []string{"/held/t"}, file: "/other/true"}, true,
@@ -173,5 +173,82 @@ func TestRunHoldingHoldsTheProgramsRealFileAndOnMacOSEveryLinkOnItsPath(t *testi
 	}
 	if !reflect.DeepEqual(n, before) {
 		t.Errorf("the folders held changed to %+v, from %+v", n, before)
+	}
+}
+
+// TestAProgramsOwnLibrariesNeverVouchForItsFolder: a program in a folder the caller did not name,
+// with a library beside it by $ORIGIN in its run path or by the library's full path, is ErrUsage
+// naming its folder, though the load search finds that folder, and nothing is added; named by the
+// caller, it passes and the loader's folder is added. A program in its loader's own folder passes
+// with no folder named. Linux's rule, over the load search's own fakes, on every system.
+//
+// What it costs when this fails: a bundled tool vouches for its own folder by its own bytes, and
+// runs from a folder the caller never named, with the right to run every file in it.
+func TestAProgramsOwnLibrariesNeverVouchForItsFolder(t *testing.T) {
+	t.Parallel()
+	const prog, gnu = "/opt/tool/prog", "/usr/lib/x86_64-linux-gnu"
+	linux := programRule{walks: true, maxLinks: 40}
+	caller := named{readWrite: []string{"/work"}}
+	for _, r := range []struct {
+		spelling string
+		f        fake
+	}{
+		{"$ORIGIN", debian().file(prog, obj(glibcAMD, "libtool.so").run("$ORIGIN")).file("/opt/tool/libtool.so", obj("", "libc.so.6"))},
+		{"a full path", debian().file(prog, obj(glibcAMD, "/opt/tool/libtool.so")).file("/opt/tool/libtool.so", obj("", "libc.so.6"))},
+	} {
+		dirs, err := loadFoldersOf(r.f, "amd64", prog, prog)
+		if want := []string{gnu, "/opt/tool"}; err != nil || !reflect.DeepEqual(dirs, want) {
+			t.Fatalf("%s: the load folders are %q, %v; want %q", r.spelling, dirs, err, want)
+		}
+		says := `it is the file "/opt/tool/prog", whose folder "/opt/tool" no folder held reaches`
+		if n, err := caller.holdingProgram(prog, walked{file: prog}, linux, dirs); !errors.Is(err, ErrUsage) || !strings.Contains(err.Error(), says) || !reflect.DeepEqual(n, named{}) {
+			t.Errorf("%s: by the caller's folders alone: %+v, %v; want nothing held and ErrUsage naming %q", r.spelling, n, err, says)
+		}
+		named := named{readOnly: []string{"/opt/tool"}}
+		want := named.with([]string{gnu})
+		if n, err := named.holdingProgram(prog, walked{file: prog}, linux, dirs); err != nil || !reflect.DeepEqual(n, want) {
+			t.Errorf("%s: with its folder named: %+v, %v; want %+v", r.spelling, n, err, want)
+		}
+	}
+	inLoader := gnu + "/tool"
+	dirs, err := loadFoldersOf(debian().file(inLoader, obj(glibcAMD, "libc.so.6")), "amd64", inLoader, inLoader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := caller.holdingProgram(inLoader, walked{file: inLoader}, linux, dirs); err != nil {
+		t.Errorf("a program in its loader's own folder: %v, want it held", err)
+	}
+}
+
+// TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt: the interpreter is the path after
+// #! and any spaces and tabs, up to a space, tab or newline; a file with no #! names none. A #!
+// line with no end in the first 512 bytes, an empty one, and a relative interpreter are errors.
+//
+// What it costs when this fails: RunHolding holds a file other than the one the kernel runs as the
+// interpreter, and a script runs one outside the folders, or fails late with exit 71.
+func TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt(t *testing.T) {
+	t.Parallel()
+	for _, r := range []struct {
+		head, interp, says string
+	}{
+		{"#!/bin/sh\necho", "/bin/sh", ""},
+		{"#! \t/usr/bin/env python3 -u\n", "/usr/bin/env", ""},
+		{"#!/held/run\targ\n", "/held/run", ""},
+		{"\xcf\xfa\xed\xfe a Mach-O file", "", ""},
+		{"", "", ""},
+		{" #!/bin/sh\n", "", ""},
+		{"#!/bin/sh", "", "has no end within its first 512 bytes"},
+		{"#!/bin/sh " + strings.Repeat("x", 600) + "\n", "", "has no end within its first 512 bytes"},
+		{"#!\n", "", `names "", which is not an absolute path`},
+		{"#!sh\n", "", `names "sh", which is not an absolute path`},
+	} {
+		head := []byte(r.head)[:min(len(r.head), maxShebang)]
+		got, err := shebang(head)
+		switch {
+		case r.says == "" && (err != nil || got != r.interp):
+			t.Errorf("%q: %q, %v; want %q", r.head, got, err, r.interp)
+		case r.says != "" && (err == nil || !strings.Contains(err.Error(), r.says)):
+			t.Errorf("%q: %q, %v; want an error saying %q", r.head, got, err, r.says)
+		}
 	}
 }

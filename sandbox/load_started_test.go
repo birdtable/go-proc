@@ -12,6 +12,13 @@ import (
 // and returns the program's exit, or LoadChild's with why it did not run, and what it printed.
 func behindTheBlock(t *testing.T, prog string, leave ...string) (int, string) {
 	t.Helper()
+	return startedAs(t, loadChild, prog, leave...)
+}
+
+// startedAs is the test binary started as the caller mode names, for the program prog, with rest
+// after the report: its exit, and what it wrote to its report and its output.
+func startedAs(t *testing.T, mode, prog string, rest ...string) (int, string) {
+	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +35,7 @@ func behindTheBlock(t *testing.T, prog string, leave ...string) (int, string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = out.Close() }()
-	args := append([]string{self, loadChild, prog, report}, leave...)
+	args := append([]string{self, mode, prog, report}, rest...)
 	p, err := os.StartProcess(self, args, &os.ProcAttr{Env: []string{"PATH=/usr/bin:/bin"}, Files: []*os.File{null, out, out}}) //nolint:forbidigo // the row starts the test binary itself, as the process a caller sets the block on
 	if err != nil {
 		t.Fatal(err)

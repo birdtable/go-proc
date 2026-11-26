@@ -27,7 +27,7 @@ func (osFiles) object(name string) (o object, err error) {
 }
 
 // loadHere is the folders prog, whose real file is real, needs to load on this system: its
-// loader's and its libraries', by the loader's own search from that file.
+// loader's first, then its libraries', by the loader's own search from that file.
 func loadHere(prog, real string) ([]string, error) {
 	return loadFoldersOf(osFiles{}, builtArch, prog, real)
 }

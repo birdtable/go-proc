@@ -356,6 +356,7 @@ type search struct {
 // for, which the block refuses itself. A file that is no ELF file, a #! script, a loader the
 // search does not know, a list with a $NAME it does not know or a folder that is not an absolute
 // path, a library that is not found and a search over its bounds are ErrUsage, naming the file.
+// The first folder is the loader's own; the rest come from the program's bytes and its libraries'.
 func loadFolders(files loadFiles, arch, prog string) ([]string, error) {
 	if _, ok := loadersOf(arch); !ok {
 		return nil, nil

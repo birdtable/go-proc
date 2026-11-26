@@ -14,7 +14,14 @@ import (
 // the copy's path.
 func copyProgram(t *testing.T, dir string) string {
 	t.Helper()
-	src, err := filepath.EvalSymlinks("/usr/bin/true")
+	return copyOf(t, "/usr/bin/true", dir)
+}
+
+// copyOf copies the program at from, by its real file, to the folder dir under its own name, and
+// returns the copy's path.
+func copyOf(t *testing.T, from, dir string) string {
+	t.Helper()
+	src, err := filepath.EvalSymlinks(from)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +29,7 @@ func copyProgram(t *testing.T, dir string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(dir, "true")
+	dst := filepath.Join(dir, filepath.Base(from))
 	if err := os.WriteFile(dst, b, 0o700); err != nil {
 		t.Fatal(err)
 	}

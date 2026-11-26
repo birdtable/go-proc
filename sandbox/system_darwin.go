@@ -25,6 +25,9 @@ func blockHere() Block { return blockOn("darwin") }
 func loadHere(string, string) ([]string, error) { return nil, nil }
 
 // programHere is how the macOS block holds the program: its path walked, with the 32 links of
-// MAXSYMLINKS, its real file beneath a folder, which is RunHolding's own check here, and every link
-// on the path beneath one too, as the system sandbox refuses to follow any other.
-func programHere() programRule { return programRule{walks: true, maxLinks: 32, linksHeld: true} }
+// MAXSYMLINKS, its real file beneath a folder, every link on the path beneath one too, as the
+// system sandbox refuses to follow any other, and a #! script's interpreter held the same way, as
+// the system sandbox holds that exec too.
+func programHere() programRule {
+	return programRule{walks: true, maxLinks: 32, linksHeld: true, interpreters: true}
+}

@@ -1,32 +1,34 @@
 package sandbox
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // The program RunHolding runs is a file like any other, held to the folders: its real file, the
-// path with every link in it followed, is beneath a folder the block holds, or RunHolding refuses
-// it with ErrUsage before anything is set, naming that file's folder, and never adds the folder.
+// path with every link in it followed, is beneath a folder the caller named or its loader's own
+// folder, or RunHolding refuses it with ErrUsage before anything is set, naming that file's folder,
+// and never adds the folder. The other load folders come from the program's own bytes, its run
+// path and the libraries it names, and never count toward holding it: a program with $ORIGIN in
+// its run path would vouch for its own folder.
 //
-// On Linux the kernel holds it too: Landlock checks the right to run the file the exec opens, the
-// real file, and no link on the way, as it has no right for a lookup. A program whose real file it
-// does not reach fails there after the block is set, and RunHolding refuses it first.
-//
-// On macOS the system sandbox does not hold it: on macOS 27.2, behind the block's own profile, a
-// program in a folder no parameter names starts, and only what it reads is held. So there the
-// hold is RunHolding's own check, made once, by the walk below, before the exec. A link on the
-// path changed after the walk, to a file outside the folders, runs that file, still behind the
-// block and with its reads and writes held: that change is the work of a writer of a folder on the
-// path, the caller's judgment, as a program or a library swapped after it was read is. The system
-// sandbox does hold every link on the path: it refuses to follow one outside the folders, the
-// root's /tmp and /var among them, and the exec fails after RunHolding has exec'd the sandbox,
-// with its exit 71, which a program could give too. RunHolding refuses such a link first, naming it.
+// The kernel holds every exec too, and the walk says before the exec what the kernel would refuse
+// after it. On Linux Landlock checks the right to run the file the exec opens, the real file, and
+// no link on the way, as it has no right for a lookup. On macOS the profile denies every exec but
+// of a file beneath the folders, and the system sandbox refuses to follow a link outside them, the
+// root's /tmp and /var among them, and to start a #! script's interpreter outside them: each fails
+// after RunHolding has exec'd the sandbox, with its exit 71, which a program could give too, and a
+// link changed after the walk fails there, closed. So on macOS RunHolding refuses such a link
+// first, naming it, and reads a #! script's first line and holds the interpreter it names as it
+// holds a program, with no lookup: a program env finds is held when env runs it.
 
 // walked is a program's path as the kernel follows it: each link it goes through, by its own
 // path, in order, and file, the real file it ends on.
@@ -141,29 +143,119 @@ func (n named) heldProgram(prog string, w walked, linksHeld bool) error {
 
 // programRule is how a system's block holds the program: walks, whether RunHolding walks its path
 // and holds it at all, where a system with no block refuses anyway; maxLinks, the kernel's limit
-// of links in one path; and linksHeld, whether every link on the path must be beneath a folder.
+// of links in one path; linksHeld, whether every link on the path must be beneath a folder; and
+// interpreters, whether a #! script's interpreter is held as the program is.
 type programRule struct {
-	walks     bool
-	maxLinks  int
-	linksHeld bool
+	walks        bool
+	maxLinks     int
+	linksHeld    bool
+	interpreters bool
 }
 
 // program is n with the program at prog's load folders added, once its path is walked and n is
 // found to hold it as this system's rule says, or ErrUsage, before anything is set.
 func program(n named, prog string) (named, error) {
 	rule := programHere()
-	if !rule.walks {
-		return loading(n, prog, prog)
+	w := walked{file: prog}
+	if rule.walks {
+		var err error
+		if w, err = walk(osLinks{}, prog, rule.maxLinks); err != nil {
+			return named{}, err
+		}
 	}
-	w, err := walk(osLinks{}, prog, rule.maxLinks)
+	dirs, err := loadHere(prog, w.file)
 	if err != nil {
 		return named{}, err
 	}
-	if n, err = loading(n, prog, w.file); err != nil {
-		return named{}, err
+	if n, err = n.holdingProgram(prog, w, rule, dirs); err != nil || !rule.interpreters {
+		return n, err
 	}
-	if err := n.heldProgram(prog, w, rule.linksHeld); err != nil {
-		return named{}, err
+	return n, n.heldInterpreter(prog, w.file, rule)
+}
+
+// holdingProgram is n with the load folders dirs added, once n holds the program prog, walked to w,
+// as rule says, by the caller's folders and the first of dirs alone, the loader's own folder. The
+// rest come from the program's own bytes, its run path and the libraries it names, and never count
+// toward holding it: a program with $ORIGIN in its run path, or a library beside it by its full
+// path, would vouch for its own folder.
+func (n named) holdingProgram(prog string, w walked, rule programRule, dirs []string) (named, error) {
+	if rule.walks {
+		if err := n.with(dirs[:min(len(dirs), 1)]).heldProgram(prog, w, rule.linksHeld); err != nil {
+			return named{}, err
+		}
 	}
-	return n, nil
+	return n.with(dirs), nil
+}
+
+// maxShebang is the bytes of a file's start in which the macOS kernel looks for a #! line's end,
+// IMG_SHSIZE.
+const maxShebang = 512
+
+// heldInterpreter is nil when the program prog, whose real file is file, is no #! script, or n
+// holds its interpreter as rule holds a program. Otherwise it is ErrUsage naming the interpreter,
+// or why it cannot be told. It reads the file's first line alone and looks nothing up: a program
+// that env finds is held when env runs it, by the system sandbox.
+func (n named) heldInterpreter(prog, file string, rule programRule) error {
+	head, err := firstBytes(file)
+	if err != nil {
+		return heldf(prog, "its first line cannot be read: %v", err)
+	}
+	interp, err := shebang(head)
+	switch {
+	case err != nil:
+		return heldf(prog, "%v", err)
+	case interp == "":
+		return nil
+	}
+	w, err := walk(osLinks{}, interp, rule.maxLinks)
+	if err == nil {
+		err = n.heldProgram(interp, w, rule.linksHeld)
+	}
+	if err != nil {
+		return fmt.Errorf("the program %q is a #! script, and its interpreter is held as a program is: %w", prog, err)
+	}
+	return nil
+}
+
+// firstBytes is the first maxShebang bytes of the file at name, or all of a shorter one. It opens
+// the file without waiting, so a FIFO put there since the walk holds nothing up, and reads it only
+// when it is a regular file.
+func firstBytes(name string) (head []byte, err error) {
+	f, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: the program its caller names is what this reads
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, errors.Join(errors.New("it is not a regular file"), err)
+	}
+	head = make([]byte, maxShebang)
+	got, err := io.ReadFull(f, head)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		err = nil
+	}
+	return head[:got], err
+}
+
+// shebang is the interpreter a file starting with head names on its #! line, as the macOS kernel
+// reads it: after the #! and any spaces and tabs, up to the next space, tab or newline. It is ""
+// for a file with no #!, and an error for a line with no end within maxShebang bytes, no
+// interpreter, or one that is not an absolute path.
+func shebang(head []byte) (string, error) {
+	rest, ok := bytes.CutPrefix(head, []byte("#!"))
+	if !ok {
+		return "", nil
+	}
+	line, _, ended := bytes.Cut(rest, []byte("\n"))
+	if !ended {
+		return "", fmt.Errorf("its #! line has no end within its first %d bytes", maxShebang)
+	}
+	line = bytes.TrimLeft(line, " \t")
+	if at := bytes.IndexAny(line, " \t"); at >= 0 {
+		line = line[:at]
+	}
+	if interp := string(line); path.IsAbs(interp) {
+		return interp, nil
+	}
+	return "", fmt.Errorf("its #! line names %q, which is not an absolute path", line)
 }
