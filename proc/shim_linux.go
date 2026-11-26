@@ -33,7 +33,7 @@ const shimEINTR = shimMark + "-eintr"
 // program is a new image whose every thread started with none: the Go runtime's other
 // threads hold what the first stage's locked thread dropped until that exec, and the caller reads each
 // thread. Its argv is the report's descriptor, the program's path and the program's argv; its
-// environment is shimRunEnv alone, none of the caller's, and it reads the program's from the descriptor
+// environment is execSecondStage's alone, none of the caller's, and it reads the program's from the descriptor
 // after the report's. The one after that is the caller's go-ahead (shimGo).
 const shimRun = shimMark + "-run"
 
@@ -168,17 +168,17 @@ func shimSteps(report int, at, argv []string, try func(func() error) error) (byt
 			return shimExec, err
 		}
 	}
-	return shimExec, syscall.Exec("/proc/self/exe", slices.Concat([]string{shimRun, strconv.Itoa(report), at[3]}, argv), shimRunEnv) //nolint:forbidigo,gosec // G204: the shim's own exec, of itself, behind what was just set
+	return shimExec, execSecondStage(syscall.Exec, report, at[3], argv) //nolint:forbidigo // the shim's own exec, of itself, behind what was just set
 }
 
-// shimRunEnv is the whole environment of the shim's second stage: since Go 1.25 the Go runtime of a
-// process in a cgroup namespace opens the cpu.max it finds under the cgroup mount, the shim's cover, and
-// keeps that descriptor, which the caller's check of the run's threads reads as a descriptor on a cgroup
-// file system, and every healthy run on a host that delegates cpu is refused as a forgery and killed.
-// containermaxprocs=0 has the runtime close it before the
-// stage's init runs. The program's environment is read from the descriptor after the report's, so this
-// reaches it in no way.
-var shimRunEnv = []string{"GODEBUG=containermaxprocs=0"} //nolint:gochecknoglobals // a constant slice the exec above reads
+// execSecondStage execs this binary by its proc's self/exe as the second stage, through exec (syscall.Exec in
+// the shim, a row's own in a test), with GODEBUG=containermaxprocs=0 its whole environment: since Go 1.25 a
+// runtime in a cgroup namespace keeps the cpu.max it opens under the shim's cgroup cover, which the caller's
+// check of the run's threads refuses as a forgery, and every healthy run on a host that delegates cpu is killed;
+// this has it closed before the stage's init. The program's environment comes by descriptor, never by this.
+func execSecondStage(exec func(argv0 string, argv, envv []string) error, report int, path string, argv []string) error {
+	return exec("/proc/self/exe", slices.Concat([]string{shimRun, strconv.Itoa(report), path}, argv), []string{"GODEBUG=containermaxprocs=0"})
+}
 
 // shimFiles is how many descriptors the run hands its shim after the program's own: the report, the
 // program's environment and the go-ahead, in that order.

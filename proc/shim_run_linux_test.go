@@ -93,7 +93,7 @@ func TestTheShimsSecondStageChecksItselfThenWaitsForTheGoAhead(t *testing.T) {
 		}
 		var out bytes.Buffer
 		cmd := exec.CommandContext(t.Context(), exe, slices.Concat([]string{helperMode + "stage", c.nnp, shimRun, c.report, c.path}, []string{"sh", "-c", script})...) //nolint:gosec // G204: this test binary, started as the shim's second stage
-		cmd.Env = []string{"STAGE=0", "GODEBUG=containermaxprocs=0"}                                                                                                   // what the first stage gives the second: shimRunEnv
+		cmd.Env = []string{"STAGE=0", "GODEBUG=containermaxprocs=0"}                                                                                                   // what the first stage gives the second: execSecondStage
 		cmd.Stdout = &out
 		cmd.ExtraFiles = []*os.File{w, env, goR}
 		cmd.SysProcAttr = c.attr
