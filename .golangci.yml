@@ -675,3 +675,51 @@ linters:
       - path: _(linux|darwin|windows)(_(amd64|arm64))?(_test)?\.go$|(^|/)sandbox/cmd/netblock/proof_test\.go$
         linters: [forbidigo]
         text: "raw-syscall:"
+      # tools/gate is the command Taskfile.yml calls in place of shell, a module of its own that the
+      # gate-lint task lints on each system, by this file; no lint of the module loads its files, so
+      # each tools/gate row reaches them alone. By the process lead's ruling of 26 Nov, a row is one
+      # linter and one reason, and none excludes a file or a linter whole. go.errors.4: tools/gate/main.go
+      # is a command's main, the one exit.
+      - path: (^|/)tools/gate/main\.go$
+        linters: [forbidigo]
+        text: "go\\.errors\\.4:"
+      # go.concurrency.1: tools/gate/main.go makes the root context, the one a command's main makes.
+      - path: (^|/)tools/gate/main\.go$
+        linters: [forbidigo]
+        text: "go\\.concurrency\\.1:"
+      # cli.errors.3: tools/gate/main.go hands the process's stdout and stderr to run, as a command's main
+      # wires the streams.
+      - path: (^|/)tools/gate/main\.go$
+        linters: [forbidigo]
+        text: "cli\\.errors\\.3:"
+      # cli.process.1: tools/gate starts the tier's own tools (go, git, the pinned linters, gotestsum,
+      # hatch). It is the tier's runner, not a library, and proc, the runner it would go through, is
+      # what it gates.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [depguard]
+        text: "cli\\.process\\.1:"
+      # cli.config.7: tools/gate parses its own step's arguments (namespace's -cached), as a command does.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [depguard]
+        text: "cli\\.config\\.7:"
+      # arch.ports.1, arch.ports.23: tools/gate asks which system it is on where a member does: namespace
+      # runs on Linux alone, and the budget's row is the host's. The module's host layer is what it gates.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [forbidigo]
+        text: "arch\\.ports\\.1, arch\\.ports\\.23:"
+      # cli.config.3: tools/gate reads the environment it hands the tier's tools (os.Environ, GORACE) and
+      # GITHUB_ACTIONS, the one name that decides anything, as tools/gate/budget.go says.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [forbidigo]
+        text: "cli\\.config\\.3:"
+      # G204: tools/gate starts the tier's tools by the names and arguments its steps give, go, git and
+      # the binaries go tool -n names for the pinned tools; no shell reads them.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [gosec]
+        text: "G204:"
+      # go.errors.1: every line tools/gate writes goes through a kept writer of tools/gate/main.go's
+      # runSteps, which keeps the first write that failed and turns a step that held red, so no single
+      # print of fmt is checked again. TestALineTheGateCouldNotWriteTurnsItsExitRed holds it.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [errcheck]
+        text: "Error return value of `fmt\\.Fprint(f|ln)?` is not checked"

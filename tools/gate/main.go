@@ -5,12 +5,14 @@
 //	go -C tools/gate run . -top <the repository's top> <step> [arguments]
 //
 // and its steps are lint, layers, test-short, namespace, psx and notice-check, each the member of
-// that name, or for psx the first command of licenses, and budget, each tier's budget step (budget.go
-// says how). A step's exit is 0 when it holds, 1 when it
-// does not or could not finish, and 2 for arguments it does not take. It is a module of its own, as
-// the tools are, so that go-proc's go.mod, its lint and its layer rows are as they were, and task
-// size leaves it out. Its own test is task taskfile's: Taskfile.yml calls Go, by go-testkit's
-// taskfile check.
+// that name, or for psx the first command of licenses; lint-gate and build, the gate-lint member and
+// the build member's build of the gate itself; and budget, each tier's budget step (budget.go says
+// how). A step's exit is 0 when it holds, 1 when it does not or could not finish, or when a line it
+// wrote was not written, and 2 for arguments it does not take. It is a module of its own, as the
+// tools are, so that go-proc's go.mod, its layer rows and task size leave it out; the push tier's
+// gate-vet, build and gate-lint members read it for each system as vet, build and lint read the
+// module, by the top's .golangci.yml. Its own test is task taskfile's: Taskfile.yml calls Go, by
+// go-testkit's taskfile check.
 package main
 
 import (
@@ -49,11 +51,13 @@ type step func(ctx context.Context, args []string, stdout, stderr io.Writer) err
 func steps() map[string]step {
 	return map[string]step{
 		"lint":         lintStep,
+		"lint-gate":    lintGateStep,
 		"layers":       layersStep,
 		"test-short":   testShortStep,
 		"namespace":    namespaceStep,
 		"psx":          psxStep,
 		"notice-check": noticeStep,
+		"build":        buildStep,
 		"budget":       budgetStep,
 	}
 }
@@ -65,6 +69,67 @@ var errRed = errors.New("gate: red")
 var errUsage = errors.New("gate: usage")
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runSteps(ctx, steps(), args, stdout, stderr)
+}
+
+// runSteps is run, with the steps it takes by name. Every line the gate writes goes through a kept
+// writer, and a step that held but whose lines were not all written exits 1, as a red: a line the
+// gate could not write is never let pass as written. So the gate checks no single write of its own.
+func runSteps(ctx context.Context, all map[string]step, args []string, stdout, stderr io.Writer) int {
+	out, errs := &kept{w: stdout}, &kept{w: stderr}
+	code := runStep(ctx, all, args, out, errs)
+	if code != 0 {
+		return code
+	}
+	if err := out.failed(); err != nil {
+		fmt.Fprintf(errs, "gate: a line to stdout was not written, so the step is red: %v\n", err)
+		return 1
+	}
+	if errs.failed() != nil {
+		return 1
+	}
+	return 0
+}
+
+// kept is one of the gate's streams. It keeps the first write that failed, for runSteps to read.
+type kept struct {
+	w   io.Writer
+	mu  sync.Mutex
+	err error
+}
+
+func (k *kept) Write(p []byte) (int, error) {
+	n, err := k.w.Write(p)
+	if err != nil {
+		k.mu.Lock()
+		if k.err == nil {
+			k.err = err
+		}
+		k.mu.Unlock()
+	}
+	return n, err
+}
+
+// failed is the first write that failed, or nil.
+func (k *kept) failed() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.err
+}
+
+// child is w as a child's stdout or stderr: the file itself where w is a kept file, so the child
+// writes it with no pipe of the gate's between, as with no gate at all, and a write of its own that
+// fails is the child's to say and exit on; w where not.
+func child(w io.Writer) io.Writer {
+	if k, ok := w.(*kept); ok {
+		if f, ok := k.w.(*os.File); ok {
+			return f
+		}
+	}
+	return w
+}
+
+func runStep(ctx context.Context, all map[string]step, args []string, stdout, stderr io.Writer) int {
 	if len(args) >= 2 && args[0] == "-top" {
 		if err := os.Chdir(args[1]); err != nil {
 			fmt.Fprintf(stderr, "gate: %v\n", err)
@@ -73,10 +138,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		args = args[2:]
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "gate: a step is the first argument: lint, layers, test-short, namespace, psx, notice-check or budget")
+		fmt.Fprintln(stderr, "gate: a step is the first argument: lint, layers, test-short, namespace, psx, notice-check, lint-gate, build or budget")
 		return 2
 	}
-	s, ok := steps()[args[0]]
+	s, ok := all[args[0]]
 	if !ok {
 		fmt.Fprintf(stderr, "gate: no step %q\n", args[0])
 		return 2
@@ -97,7 +162,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 // command is name with args, run at the top with env set over the task's own environment. A child
 // still running when the gate is told to stop is killed, and its pipes are let go a second after.
 func command(ctx context.Context, env []string, name string, args ...string) *exec.Cmd {
-	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // the tier's own tools, go and git, with the gate's arguments
+	c := exec.CommandContext(ctx, name, args...)
 	c.Env = append(os.Environ(), env...)
 	c.WaitDelay = time.Second
 	return c
@@ -127,14 +192,16 @@ type result struct {
 	err error
 }
 
-// together runs one golangci-lint per system at once, each with its own args and GOOS, and gives
-// each its output and its error, in the order of systems.
-func together(ctx context.Context, bin string, systems []string, args ...string) []result {
+// together runs one golangci-lint per system at once in dir, the top when "", each with its own args
+// and GOOS, and gives each its output and its error, in the order of systems.
+func together(ctx context.Context, bin, dir string, systems []string, args ...string) []result {
 	res := make([]result, len(systems))
 	var wg sync.WaitGroup
 	for i, goos := range systems {
 		wg.Go(func() {
-			out, err := command(ctx, []string{"CGO_ENABLED=0", "GOOS=" + goos}, bin, args...).CombinedOutput()
+			c := command(ctx, []string{"CGO_ENABLED=0", "GOOS=" + goos}, bin, args...)
+			c.Dir = dir
+			out, err := c.CombinedOutput()
 			res[i] = result{out, err}
 		})
 	}
@@ -160,8 +227,12 @@ func report(stdout io.Writer, name string, systems []string, res []result) error
 	return nil
 }
 
-// lintStep is golangci-lint for each of the three systems, run together, as the lint member was.
-// Its lint's timeout is the member's.
+// gateDir is tools/gate, this module's own folder from the top: a module of its own, which no run of
+// go over the module's ./... reads.
+const gateDir = "tools/gate"
+
+// lintStep is golangci-lint for each of the three systems, run together, as the lint member was. Its
+// lint's timeout is the member's.
 func lintStep(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err := noArgs("lint", args, stderr); err != nil {
 		return err
@@ -171,7 +242,61 @@ func lintStep(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	systems := []string{"linux", "darwin", "windows"}
-	return report(stdout, "lint", systems, together(ctx, bin, systems, "run", "--allow-parallel-runners", "./..."))
+	return report(stdout, "lint", systems, together(ctx, bin, "", systems, "run", "--allow-parallel-runners", "./..."))
+}
+
+// lintGateStep is golangci-lint of tools/gate for each of the three systems, run together, by the
+// top's .golangci.yml, named, so no config of its own could take that one's place. It is the push
+// tier's, not the commit tier's, as lint of the module is both.
+func lintGateStep(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if err := noArgs("lint-gate", args, stderr); err != nil {
+		return err
+	}
+	bin, err := tool(ctx, "golangci-lint")
+	if err != nil {
+		return err
+	}
+	cfg, err := filepath.Abs(".golangci.yml")
+	if err != nil {
+		return err
+	}
+	systems := []string{"linux", "darwin", "windows"}
+	return report(stdout, "lint "+gateDir, systems,
+		together(ctx, bin, filepath.FromSlash(gateDir), systems, "run", "--allow-parallel-runners", "--config", cfg, "./..."))
+}
+
+// buildStep is go build of tools/gate for each system and architecture the build member builds the
+// module for. go build of a lone main package writes its binary, so each goes into a folder of the
+// system's temporary folder, removed with it, never into the tree.
+func buildStep(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if err := noArgs("build", args, stderr); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "go-proc-gate-build-")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintf(stderr, "gate: the build's folder is left behind: %v\n", err)
+		}
+	}()
+	var targets []string
+	var res []result
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		for _, goarch := range []string{"amd64", "arm64"} {
+			c := command(ctx, []string{"CGO_ENABLED=0", "GOOS=" + goos, "GOARCH=" + goarch},
+				"go", "-C", filepath.FromSlash(gateDir), "build", "-o", filepath.Join(dir, goos+"-"+goarch), ".")
+			out, err := c.CombinedOutput()
+			targets = append(targets, goos+"/"+goarch)
+			res = append(res, result{out, err})
+		}
+	}
+	if err := report(stdout, "build "+gateDir, targets, res); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "build %s: built for %s\n", gateDir, strings.Join(targets, ", "))
+	return nil
 }
 
 // goraceTests is GORACE for the tests: atexit_sleep_ms=0 after whatever the caller's GORACE holds,
@@ -259,21 +384,24 @@ func gotestsum(ctx context.Context, stdout, stderr io.Writer, prefix []string, a
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintf(stderr, "gate: the tests' folder is left behind: %v\n", err)
+		}
+	}()
 	f := filepath.Join(dir, "tests.json")
 	argv := append(slices.Clone(prefix), "go", "tool", "-modfile=tools/gotestsum.mod", "gotestsum", "--format", "testname", "--jsonfile", f, "--")
 	argv = append(argv, args...)
 	c := command(ctx, []string{"CGO_ENABLED=1", "GORACE=" + goraceTests()}, argv[0], argv[1:]...)
-	c.Stdout, c.Stderr = stdout, stderr
+	c.Stdout, c.Stderr = child(stdout), child(stderr)
 	if err := c.Run(); err != nil {
 		return nil, errRed
 	}
-	j, err := os.Open(f)
+	j, err := os.ReadFile(filepath.Clean(f))
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = j.Close() }()
-	return events(j)
+	return events(bytes.NewReader(j))
 }
 
 // testShortStep is the push tier's suite, -race and -short, from the test cache where nothing
@@ -372,7 +500,7 @@ func psxStep(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	mod := args[0]
 	c := command(ctx, nil, "go", "list", "-deps", "-f", "{{if .Module}}{{.ImportPath}} {{.Module.Path}}{{end}}", "./...")
-	c.Stderr = stderr
+	c.Stderr = child(stderr)
 	list, err := c.Output()
 	if err != nil {
 		return fmt.Errorf("go list: %w", err)
@@ -397,7 +525,7 @@ func noticeStep(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	var mods bytes.Buffer
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		c := command(ctx, []string{"GOOS=" + goos}, "go", "list", "-deps", "-f", "{{with .Module}}{{.Path}} {{.Version}}{{end}}", "./...")
-		c.Stderr = stderr
+		c.Stderr = child(stderr)
 		out, err := c.Output()
 		if err != nil {
 			return fmt.Errorf("go list for %s: %w", goos, err)
@@ -406,7 +534,7 @@ func noticeStep(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		mods.WriteByte('\n')
 	}
 	c := command(ctx, []string{"CGO_ENABLED=0"}, "go", "run", "./internal/cmd/measure", "notice-check")
-	c.Stdin, c.Stdout, c.Stderr = &mods, stdout, stderr
+	c.Stdin, c.Stdout, c.Stderr = &mods, child(stdout), child(stderr)
 	if err := c.Run(); err != nil {
 		return errRed
 	}

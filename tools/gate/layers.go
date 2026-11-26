@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -37,8 +38,8 @@ func wants(fsys fs.FS, root string) ([]string, error) {
 		n := 0
 		for line := range strings.Lines(string(b)) {
 			n++
-			if i := strings.LastIndex(line, wantMark); i >= 0 {
-				out = append(out, fmt.Sprintf("%s:%d %s", name, n, strings.TrimSpace(line[i+len(wantMark):])))
+			if _, rule, ok := strings.CutLast(line, wantMark); ok {
+				out = append(out, fmt.Sprintf("%s:%d %s", name, n, strings.TrimSpace(rule)))
 			}
 		}
 		return nil
@@ -191,7 +192,11 @@ func layersStep(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	}
 	rs := rows(string(yaml))
 	for _, r := range rs {
-		if m, _ := filepath.Glob(filepath.Join(filepath.FromSlash(r), "*.go")); len(m) == 0 {
+		m, err := filepath.Glob(filepath.Join(filepath.FromSlash(r), "*.go"))
+		if err != nil {
+			return fmt.Errorf("the row %s of layers.yaml: %w", r, err)
+		}
+		if len(m) == 0 {
 			fmt.Fprintf(stderr, "layers: the row %s of layers.yaml names no folder of Go files\n", r)
 			return errRed
 		}
@@ -218,11 +223,16 @@ func layersStep(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	for _, d := range dirs {
 		lintArgs = append(lintArgs, "./"+d)
 	}
-	out, _ := command(ctx, []string{"CGO_ENABLED=0"}, bin, lintArgs...).CombinedOutput()
+	// depguard exits 1 on the planted packages, as it must: their want lines, not its exit, decide. A
+	// run that could not start is its own error.
+	out, err := command(ctx, []string{"CGO_ENABLED=0"}, bin, lintArgs...).CombinedOutput()
+	if err := exited(err); err != nil && !errors.Is(err, errRed) {
+		return err
+	}
 	if err := differ(stderr, "depguard on the planted packages is not their want lines", "want", want, "got", issues(string(out))); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "layers: %d planted imports red, each by its rule\n", len(want))
 	systems := []string{"linux", "windows"}
-	return report(stdout, "layers", systems, together(ctx, bin, systems, "run", "--allow-parallel-runners", "--enable-only", "depguard", "--build-tags", "live,race", "./..."))
+	return report(stdout, "layers", systems, together(ctx, bin, "", systems, "run", "--allow-parallel-runners", "--enable-only", "depguard", "--build-tags", "live,race", "./..."))
 }

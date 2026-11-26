@@ -3,6 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,13 +18,73 @@ import (
 // take, passes and checks nothing.
 func TestRunRefusesAStepOrArgumentsItDoesNotKnow(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{nil, {"nope"}, {"lint", "x"}, {"layers", "x"}, {"test-short", "x"}, {"notice-check", "x"}, {"psx"}, {"psx", "a", "b"}, {"namespace"}, {"namespace", "-nope", "./proc/"}} {
+	for _, args := range [][]string{nil, {"nope"}, {"lint", "x"}, {"layers", "x"}, {"test-short", "x"}, {"notice-check", "x"}, {"build", "x"}, {"lint-gate", "x"}, {"psx"}, {"psx", "a", "b"}, {"namespace"}, {"namespace", "-nope", "./proc/"}} {
 		var out, errs bytes.Buffer
 		if code := run(context.Background(), args, &out, &errs); code != 2 {
 			t.Errorf("run(%q) exited %d, and want 2: %s%s", args, code, &out, &errs)
 		}
 	}
 }
+
+// failing is a stream whose every write fails, as a closed pipe's or a full disk's does.
+type failing struct{}
+
+func (failing) Write([]byte) (int, error) { return 0, errors.New("planted: the stream is closed") }
+
+// What it costs when this fails: a step that held passes though a line it wrote, its verdict or its
+// reason, was never written, so tools/gate's unchecked prints would let a lost line pass.
+func TestALineTheGateCouldNotWriteTurnsItsExitRed(t *testing.T) {
+	t.Parallel()
+	all := map[string]step{
+		"say": func(_ context.Context, _ []string, stdout, stderr io.Writer) error {
+			fmt.Fprintln(stdout, "out")
+			fmt.Fprintln(stderr, "err")
+			return nil
+		},
+		"red":   func(context.Context, []string, io.Writer, io.Writer) error { return errRed },
+		"usage": func(context.Context, []string, io.Writer, io.Writer) error { return errUsage },
+	}
+	for _, c := range []struct {
+		name           string
+		step           string
+		stdout, stderr func(*bytes.Buffer) io.Writer
+		want           int
+		said           string
+	}{
+		{"both written", "say", buf, buf, 0, ""},
+		{"stdout lost", "say", fail, buf, 1, "a line to stdout was not written"},
+		{"stderr lost", "say", buf, fail, 1, ""},
+		{"red stays red", "red", fail, fail, 1, ""},
+		{"usage stays usage", "usage", fail, fail, 2, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var out, errs bytes.Buffer
+			if code := runSteps(context.Background(), all, []string{c.step}, c.stdout(&out), c.stderr(&errs)); code != c.want {
+				t.Errorf("runSteps exited %d, and want %d: %s%s", code, c.want, &out, &errs)
+			}
+			if !strings.Contains(errs.String(), c.said) {
+				t.Errorf("stderr is %q, and want it to say %q", &errs, c.said)
+			}
+		})
+	}
+	f, err := os.Create(filepath.Join(t.TempDir(), "stream"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	if got := child(&kept{w: f}); got != io.Writer(f) {
+		t.Errorf("child of a kept file is %T, and want the file itself", got)
+	}
+	var b bytes.Buffer
+	if k := (&kept{w: &b}); child(k) != io.Writer(k) {
+		t.Error("child of a kept buffer is not the kept writer")
+	}
+}
+
+func buf(b *bytes.Buffer) io.Writer { return b }
+
+func fail(*bytes.Buffer) io.Writer { return failing{} }
 
 // What it costs when this fails: a test that skips without saying it runs in the release tier
 // passes the push tier, or one that says so fails it.
