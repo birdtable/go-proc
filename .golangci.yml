@@ -413,6 +413,11 @@ linters:
           msg: "cli.process.1: start programs through the runner"
         - pattern: ^syscall\.(ForkExec|Exec|StartProcess)$
           msg: "cli.process.1: start programs through the runner"
+        # This repo: x/sys's exec is the same execve as syscall's, so it is held the same way. The
+        # shim's two execs (proc/shim_linux.go), of its second stage and of the program, each carry their own nolint and reason.
+        - pattern: ^unix\.Exec$
+          pkg: ^golang\.org/x/sys/unix$
+          msg: "cli.process.1: start programs through the runner"
         - pattern: ^runtime\.(GOOS|GOARCH)$
           msg: "arch.ports.1, arch.ports.23: platform checks belong in the host layer"
         - pattern: ^testing\.(T|B|F)\.(Skip|Skipf|SkipNow)$
