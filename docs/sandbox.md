@@ -36,7 +36,9 @@ neither #! nor a program's format, which the kernel refuses with ENOEXEC and exe
 /bin/sh, is refused the same way unless /bin is named: a Mach-O file whose filetype is not
 MH_EXECUTE, a library or an object, among them, and a #! script whose interpreter is no Mach-O
 program, a script itself or a plain file, as the kernel starts no other interpreter for a script.
-With /bin named, such a file and a #!/bin/sh script run, but behind the block /bin/sh cannot read
+The kernel looks that interpreter up under the system sandbox before it refuses it, so the
+interpreter must be beneath the folders as well as /bin/sh, or the script is refused naming its
+folder. With /bin named, such a file and a #!/bin/sh script run, but behind the block /bin/sh cannot read
 /private/var/select/sh, the link that picks the shell it runs: it writes that error to the
 program's standard error and runs its default shell. A file the caller may not run, as access(2)
 with X_OK asks the kernel, which refuses it before any shell or interpreter, is refused whatever

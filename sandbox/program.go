@@ -34,7 +34,8 @@ import (
 // sandbox-exec's execvp runs it with /bin/sh instead, so RunHolding holds /bin/sh for it the same
 // way: a Mach-O file whose filetype is not MH_EXECUTE among them, and a #! script whose
 // interpreter is no Mach-O program, a script itself or any such file, as the kernel starts no
-// other interpreter for a script. A file the caller has no right to run, as access(2) asks the
+// other interpreter for a script; it looks that interpreter up first, under the system sandbox, so
+// the interpreter is held too. A file the caller has no right to run, as access(2) asks the
 // kernel, the kernel refuses with EACCES before it reads the file, and execvp runs no shell for
 // it, so RunHolding refuses it first, whatever its first line.
 
@@ -222,26 +223,32 @@ func (n named) heldInterpreter(prog, file string, rule programRule) error {
 	case interp == "":
 		return nil
 	}
-	script, inner := bytes.HasPrefix(head, []byte("#!")), ""
+	script := bytes.HasPrefix(head, []byte("#!"))
 	w, err := walk(osLinks{}, interp, rule.maxLinks)
-	if err == nil && script {
-		if ihead, rerr := firstBytes(w.file); rerr == nil && !machO(ihead) {
-			interp, inner = bourneShell, w.file
-			w, err = walk(osLinks{}, interp, rule.maxLinks)
-		}
-	}
 	if err == nil {
 		err = n.heldProgram(interp, w, rule.linksHeld)
 	}
 	switch {
-	case err == nil:
-		return nil
-	case inner != "":
-		return fmt.Errorf("the program %q is a #! script whose interpreter's real file %q is no Mach-O program, which the kernel refuses to start for a script, so it is run by %s, which is held as a program is: %w", prog, inner, bourneShell, err)
-	case script:
+	case err != nil && script:
 		return fmt.Errorf("the program %q is a #! script, and its interpreter is held as a program is: %w", prog, err)
+	case err != nil:
+		return fmt.Errorf("the program %q is neither a #! script nor a Mach-O program, so it is run by %s, which is held as a program is: %w", prog, bourneShell, err)
+	case !script:
+		return nil
 	}
-	return fmt.Errorf("the program %q is neither a #! script nor a Mach-O program, so it is run by %s, which is held as a program is: %w", prog, bourneShell, err)
+	// The kernel looks the interpreter up, under the system sandbox, before it refuses one that is
+	// no Mach-O program, so the interpreter stays held, and /bin/sh, which execvp then runs, too.
+	if ihead, rerr := firstBytes(w.file); rerr != nil || machO(ihead) {
+		return nil
+	}
+	sh, err := walk(osLinks{}, bourneShell, rule.maxLinks)
+	if err == nil {
+		err = n.heldProgram(bourneShell, sh, rule.linksHeld)
+	}
+	if err != nil {
+		return fmt.Errorf("the program %q is a #! script whose interpreter's real file %q is no Mach-O program, which the kernel refuses to start for a script, so it is run by %s, which is held as a program is: %w", prog, w.file, bourneShell, err)
+	}
+	return nil
 }
 
 // bourneShell is the program execvp runs a file with when the kernel refuses it with ENOEXEC, as

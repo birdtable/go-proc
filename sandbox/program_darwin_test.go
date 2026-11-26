@@ -184,7 +184,10 @@ func TestOnMacOSAFileThatIsNoProgramIsHeldToTheShellThatRunsIt(t *testing.T) {
 // whose filetype is a library's, MH_DYLIB, and a #! script whose interpreter, in the folder held,
 // is a #! script itself, or a plain file, as the kernel starts no interpreter for a script but a
 // Mach-O program. With /bin held Check passes each, and RunHolding runs each script with /bin/sh,
-// which reads its #! line as a comment and exits 0. A script whose interpreter is a Mach-O program
+// which reads its #! line as a comment and exits 0. The kernel looks such an interpreter up, under
+// the system sandbox, before it refuses it, so it is held as well as /bin/sh: a script whose
+// interpreter is a #! script in a folder not held is ErrUsage naming that folder from Check and
+// RunHolding, with /bin held. A script whose interpreter is a Mach-O program
 // in the folder held is TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders's row. A
 // universal file whose arm64 slice is that library passes Check with /bin not held, as its slices
 // are not read: the limit docs/sandbox.md names, whose line
@@ -236,6 +239,24 @@ func TestOnMacOSAFileTheKernelRefusesWithENOEXECIsHeldToTheShell(t *testing.T) {
 		if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", r.prog, nil); code != 0 {
 			t.Errorf("RunHolding of %s, /bin held: exit %d, said %q; want 0", r.claim, code, said)
 		}
+	}
+
+	outside := filepath.Join(dir, "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	away, outerAway := filepath.Join(outside, "inner"), filepath.Join(held, "outeraway")
+	for p, body := range map[string]string{away: "#!/usr/bin/true\n", outerAway: "#!" + away + "\n"} {
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	says := `the program "` + outerAway + `" is a #! script, and its interpreter is held as a program is: the program "` + away + `" cannot be held: it is the file "` + away + `", whose folder "` + outside + `" no folder held reaches`
+	if _, err := Check(Folders{ReadOnly: []string{held, "/bin"}}, outerAway); !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || !strings.Contains(err.Error(), says) {
+		t.Errorf("Check of a script whose interpreter is a script outside the folders, /bin held: %v, want ErrUsage, never ErrNoBlock, and %q", err, says)
+	}
+	if code, said := heldRun(t, filepath.Join(dir, "report", "report"), "/bin", outerAway, nil); code != childUsage || !strings.Contains(said, says) {
+		t.Errorf("RunHolding of a script whose interpreter is a script outside the folders, /bin held: exit %d, said %q; want exit %d and %q", code, said, childUsage, says)
 	}
 
 	universal := filepath.Join(held, "universal")
