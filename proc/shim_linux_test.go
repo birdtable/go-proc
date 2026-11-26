@@ -193,15 +193,15 @@ func TestShimEnterTakesTheFolderAgainByWhatTheKernelOpened(t *testing.T) {
 		want                                     []string
 	}{
 		{"/proc/self/cwd", "/sys/fs/cgroup/run", nil, nil, nil, nil, nil, []string{"chdir /proc/self/cwd", "getwd", "open /sys/fs/cgroup/run", "fchdir"}},
-		{"rel/../dir", "/home/caller/dir", nil, nil, nil, nil, nil, []string{"chdir rel/../dir", "getwd", "open /home/caller/dir", "fchdir"}},
-		{"", "/home/caller", nil, nil, nil, nil, nil, []string{"getwd", "open /home/caller", "fchdir"}},
+		{"rel/../dir", "/home/someone/dir", nil, nil, nil, nil, nil, []string{"chdir rel/../dir", "getwd", "open /home/someone/dir", "fchdir"}},
+		{"", "/home/someone", nil, nil, nil, nil, nil, []string{"getwd", "open /home/someone", "fchdir"}},
 		{"/locked", "", refused, nil, nil, nil, refused, []string{"chdir /locked"}},
 		{"/proc/self/fd/40", "", nil, unix.ENOENT, nil, nil, unix.ENOENT, []string{"chdir /proc/self/fd/40", "getwd"}},
 		{"/proc/self/cwd", "", nil, unix.ENOENT, nil, nil, unix.ENOENT, []string{"chdir /proc/self/cwd", "getwd"}},
-		{"/home/caller/dir", "/home/caller/dir", nil, nil, unix.ELOOP, nil, unix.ELOOP, []string{"chdir /home/caller/dir", "getwd", "open /home/caller/dir"}},
-		{"/home/caller/dir", "/home/caller/dir", nil, nil, unix.ENOSYS, nil, unix.ENOSYS, []string{"chdir /home/caller/dir", "getwd", "open /home/caller/dir"}},
-		{"/home/caller/dir", "/home/caller/dir", nil, nil, unix.EPERM, nil, unix.EPERM, []string{"chdir /home/caller/dir", "getwd", "open /home/caller/dir"}},
-		{"", "/home/caller", nil, nil, nil, refused, refused, []string{"getwd", "open /home/caller", "fchdir"}},
+		{"/home/someone/dir", "/home/someone/dir", nil, nil, unix.ELOOP, nil, unix.ELOOP, []string{"chdir /home/someone/dir", "getwd", "open /home/someone/dir"}},
+		{"/home/someone/dir", "/home/someone/dir", nil, nil, unix.ENOSYS, nil, unix.ENOSYS, []string{"chdir /home/someone/dir", "getwd", "open /home/someone/dir"}},
+		{"/home/someone/dir", "/home/someone/dir", nil, nil, unix.EPERM, nil, unix.EPERM, []string{"chdir /home/someone/dir", "getwd", "open /home/someone/dir"}},
+		{"", "/home/someone", nil, nil, nil, refused, refused, []string{"getwd", "open /home/someone", "fchdir"}},
 	} {
 		var calls []string
 		err := shimEnter(tc.dir, func(path string) error {
