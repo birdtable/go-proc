@@ -30,6 +30,15 @@ func execFuncs() map[string]string {
 	return map[string]string{"sandbox": "spawnExec"}
 }
 
+// heldNames is each name of the module's own that reaches an exec without the exec of execFuncs,
+// by the folder of the package that declares it, to the one file that may name it: the sandbox's
+// spawnAddr, the address of the trampoline to libSystem's posix_spawn, which rawSyscall6 calls from
+// any file of the package as spawnExec does. A reference in any other file is a site, and want holds
+// none.
+func heldNames() map[string]map[string]string {
+	return map[string]map[string]string{"sandbox": {"spawnAddr": "sandbox/spawn_darwin.go"}}
+}
+
 // want is each exec the module has: the shim's of its second stage and of the program, and the
 // sandbox block's of the program on Linux and on macOS, where spawnExec execs it and syscall.Exec is
 // handed in, for no path, to put the open-file limit back.
@@ -43,8 +52,8 @@ func want() []string {
 	}
 }
 
-// sites is each reference to an Exec of execPackages, or to an exec of execFuncs outside its own
-// declaration, in the non-test Go files beneath top, as "<file> <enclosing function> <name>", sorted:
+// sites is each reference to an Exec of execPackages, to an exec of execFuncs outside its own
+// declaration, or to a name of heldNames outside its one file, in the non-test Go files beneath top, as "<file> <enclosing function> <name>", sorted:
 // a call, or the function handed on as a value, once for each time it is named. A reference outside
 // every function is "(top level)", and a file that imports one of the packages by "." is listed by
 // that import, as its Exec cannot be told from another name. Every file is read, whatever system or
@@ -114,7 +123,13 @@ func fileSites(path, rel string) ([]string, error) {
 		}
 	}
 	own := execFuncs()[pathpkg.Dir(rel)] // the exec of the module's own this file's package declares, if any
-	if len(names) == 0 && own == "" {
+	var held []string                    // the names of heldNames this file's package declares and this file may not name
+	for name, file := range heldNames()[pathpkg.Dir(rel)] {
+		if file != rel {
+			held = append(held, name)
+		}
+	}
+	if len(names) == 0 && own == "" && len(held) == 0 {
 		return out, nil
 	}
 	f, err = parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
@@ -144,6 +159,9 @@ func fileSites(path, rel string) ([]string, error) {
 			case *ast.Ident:
 				if own != "" && n.Name == own && n != decl {
 					out = append(out, rel+" "+where+" "+own)
+				}
+				if slices.Contains(held, n.Name) {
+					out = append(out, rel+" "+where+" "+n.Name)
 				}
 			}
 			return true
@@ -192,12 +210,14 @@ func extra(got, want []string) (more, missing []string) {
 // TestTheModuleExecsOnlyAtTheShimsTwoAndTheSandboxBlocksTwo: the module's non-test source names
 // syscall.Exec, x/sys/unix's Exec or the sandbox's spawnExec only at its four execs, each once: the
 // shim's of its second stage (shimSteps) and of the program (shimStart), and the sandbox block's of
-// the program on Linux, and on macOS, where it names both spawnExec and syscall.Exec. A raw execve is
-// not this row's: the raw-syscall lint row keeps it to a file built for one system.
+// the program on Linux, and on macOS, where it names both spawnExec and syscall.Exec. It names the
+// sandbox's spawnAddr, posix_spawn's trampoline, only in sandbox/spawn_darwin.go, where spawnExec
+// calls it. A raw execve is not this row's: the raw-syscall lint row keeps it to a file built for
+// one system.
 //
 // What it costs when this fails: a new exec in the library replaces a process's image outside the
 // four whose environment, descriptors and privileges the shim and the block hold, and lint passes it
-// once its line carries a //nolint, or, through spawnExec, with none.
+// once its line carries a //nolint, or, through spawnExec or rawSyscall6 with spawnAddr, with none.
 func TestTheModuleExecsOnlyAtTheShimsTwoAndTheSandboxBlocksTwo(t *testing.T) {
 	t.Parallel()
 	got, err := sites(root)
@@ -217,10 +237,12 @@ func TestTheModuleExecsOnlyAtTheShimsTwoAndTheSandboxBlocksTwo(t *testing.T) {
 // exec planted in a non-test file is listed by its file and function, and is the only site want
 // does not hold, however it is reached: a call that carries //nolint:forbidigo, x/sys/unix's Exec by
 // another name, the function handed on as a value in a method, a reference at the top level, a
-// second reference in a function want already names, a "." import, and spawnExec called in another
-// file of the sandbox. One planted in a test file, in testdata, in a dot folder or in a module of its
-// own is not listed, nor is a blank import, spawnExec's own declaration, a field of its name, or a
-// name spawnExec in a package other than the sandbox's.
+// second reference in a function want already names, a "." import, spawnExec called in another
+// file of the sandbox, and posix_spawn called through rawSyscall6 with spawnAddr in another darwin
+// file of the sandbox. One planted in a test file, in testdata, in a dot folder or in a module of
+// its own is not listed, nor is a blank import, spawnExec's own declaration, the references to
+// spawnAddr in sandbox/spawn_darwin.go, a field of either's name, or a name spawnExec or spawnAddr
+// in a package other than the sandbox's.
 //
 // What it costs when this fails: the row over the real tree passes a new exec that is spelled
 // another way, and the library replaces a process's image where nothing holds what it is given.
@@ -248,6 +270,9 @@ func TestAPlantedExecIsListedByItsFileAndFunction(t *testing.T) {
 	plant(t, top, "sandbox/again_darwin.go", "package sandbox\n\nimport \"syscall\"\n\nfunc execAgain(prog string, argv, env []string) error {\n\treturn spawnExec(func(string, []string, []string) error { return syscall.ENOENT }, prog, argv, env)\n}\n")
 	plant(t, top, "sandbox/field.go", "package sandbox\n\ntype held struct{ spawnExec bool }\n\nfunc (h held) spawning() bool { return h.spawnExec }\n")
 	plant(t, top, "proc/spawn.go", "package proc\n\nfunc spawnExec() {}\n\nfunc spawnAgain() { spawnExec() }\n")
+	plant(t, top, "sandbox/addr_darwin.go", "//go:build darwin\n\npackage sandbox\n\nfunc spawnAgain(path, argv, env uintptr) uintptr {\n\tbeforeExec()\n\tr, _, _ := rawSyscall6(spawnAddr, 0, path, 0, 0, argv, env)\n\tafterExec()\n\treturn r\n}\n")
+	plant(t, top, "sandbox/addrfield.go", "package sandbox\n\ntype addrs struct{ spawnAddr uintptr }\n\nfunc (a addrs) spawn() uintptr { return a.spawnAddr }\n")
+	plant(t, top, "proc/addr.go", "package proc\n\nvar spawnAddr uintptr\n\nfunc addrAgain() uintptr { return spawnAddr }\n")
 	// a second reference to syscall.Exec in shimStart, which want names once
 	shim := filepath.Join(top, "proc", "shim_linux.go")
 	b, err := os.ReadFile(shim)
@@ -268,6 +293,7 @@ func TestAPlantedExecIsListedByItsFileAndFunction(t *testing.T) {
 		"proc/dot_unix.go (import) . syscall",
 		"proc/shim_linux.go shimStart syscall.Exec",
 		"proc/start_linux.go startAgain syscall.Exec",
+		"sandbox/addr_darwin.go spawnAgain spawnAddr",
 		"sandbox/again.go (*k).again unix.Exec",
 		"sandbox/again_darwin.go execAgain spawnExec",
 		"service/top.go (top level) syscall.Exec",
