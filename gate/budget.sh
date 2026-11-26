@@ -61,8 +61,17 @@ cpu)
 	fi
 	set -- --cpu --cpu-row '^(?P<id>[a-z-]+)-cpu_limit: (?P<limit>[0-9]+)$' --budgets budgets.yaml --row '^(?P<id>[a-z-]+)-budget: (?P<limit>[0-9]+)$'
 	set -- "$@" --tier "$tier" --since "$start" --window 1 --noun "$tier"
-	go tool -modfile=tools/hatch.mod hatch budget "$@" --advice "a tier over its CPU budget is a speed bug to find; budgets.yaml has the budgets" -- go tool -modfile=tools/task.mod task "$tier-members"
-	exit
+	# hatch adds no --advice under --cpu, so the note on a red is this file's. Every red of hatch exits
+	# 1, a member's failure as much as an overrun, so the note says which red it is about. The row is
+	# measured warm: a cold build cache, after a module or toolchain bump or a cleared cache, builds
+	# what a warm push reuses (budgets.yaml has both figures). Its push fails all the same, and the
+	# next push is judged in full: nothing is waived and no hook is skipped.
+	code=0
+	go tool -modfile=tools/hatch.mod hatch budget "$@" -- go tool -modfile=tools/task.mod task "$tier-members" || code=$?
+	if [ "$code" -ne 0 ]; then
+		echo "budget: if $tier is over its CPU budget above, a cold build cache can explain it: the first push after a module or toolchain bump, or a cleared cache, builds what a warm push reuses, and $tier measured 434 s of CPU on an empty build cache against 50 s warm. Push again: the second push reads the cache warm and is judged in full. Past the row warm, it is a speed bug to find; budgets.yaml has the row" >&2
+	fi
+	exit "$code"
 	;;
 *)
 	echo "budget: the step is '$step', and wants start, end or cpu" >&2
