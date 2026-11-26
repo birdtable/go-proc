@@ -707,3 +707,8 @@ linters:
       - path: (^|/)tools/gate/[^/]+\.go$
         linters: [forbidigo]
         text: "arch\\.ports\\.1, arch\\.ports\\.23:"
+      # cli.config.3: tools/gate reads the environment it hands the tier's tools (os.Environ, GORACE) and
+      # GITHUB_ACTIONS, the one name that decides anything, as tools/gate/budget.go says.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [forbidigo]
+        text: "cli\\.config\\.3:"
