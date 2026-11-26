@@ -126,8 +126,9 @@ go-proc's direct dependencies, as `go.mod` requires them:
 not reached. On Windows a process that a system service starts on a child's behalf (WMI, Task
 Scheduler) is not in the tree, and a process of the tree runs as your user, so it can duplicate the
 job's handle: held open, the handle keeps the job, and that process, alive after your program
-exits, and lets it allow breakaway, clear kill-on-close or lift the job's limits. The package docs
-say exactly what each bound holds.
+exits, and lets it allow breakaway, clear kill-on-close or lift the job's limits. A program killed
+after Windows makes a child and before the next call puts it in its job leaves the child suspended.
+The package docs say exactly what each bound holds.
 
 ## Systems
 

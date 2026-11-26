@@ -39,6 +39,16 @@ not a jail. These are documented, and not a vulnerability on their own:
 - on Windows, a process that a system service starts on a child's behalf (WMI, Task Scheduler);
 - on Windows, a process of the tree that duplicates its job's handle from the caller, which keeps
   the job, and itself, alive after the caller exits, and lets it allow breakaway, clear
-  kill-on-close or lift the job's limits.
+  kill-on-close or lift the job's limits;
+- on Windows, a process that `Run` or `Start` made, left suspended with no parent and in no job that
+  ends it, when the caller is killed after Windows makes the process, inside `os/exec`'s start, and
+  before the next call puts it in its job. Measured on GitHub's `windows-latest` runner with the race
+  detector, that window is about 5 ms of a 6 ms start: of 100 callers each of `Start` and of `Run`
+  killed 0 to 9.9 ms after they began, 43 and 46 left a process so, every one killed 1.1 to 6.1 ms in.
+  No order of calls after `os/exec`'s start can shrink it. A process left so runs nothing, and holds
+  what it was given until it is ended: its output, the files handed to it, its program file and its
+  folder. `taskkill /f /pid <pid>` ends it, as does the end of the session it runs in: a restart, for
+  a service. A start of go-proc's own, which makes the process in its job, would close the window;
+  it changes `Tree.Leader`'s type, and is left to the API review before v1.0.0.
 
 If you find a way around a bound the docs say *is* held, that is one.

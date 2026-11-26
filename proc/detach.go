@@ -102,7 +102,10 @@ var errTreeID = errors.New("proc: the tree id is not one Start gives on this sys
 // console, so none opens, and is in a Job Object of its own. On Windows a caller that is in a job
 // cannot start a tree out of it: the tree's job is nested in the caller's, and a caller's job that
 // ends its processes ends the tree too, and a console program the tree starts opens a console, and
-// its window, unless it is started with CREATE_NO_WINDOW or DETACHED_PROCESS. Every process the
+// its window, unless it is started with CREATE_NO_WINDOW or DETACHED_PROCESS. On Windows the leader
+// starts in a job that ends it if the caller dies before the tree is whole, and a caller killed
+// after Windows makes the leader and before the next call puts it in that job leaves it suspended,
+// in no job that ends it. Every process the
 // program starts is in its tree unless it leaves, as on Unix a new session does. A d refused as Run
 // refuses a Cmd's Path starts nothing, and so does a system with no tree to name, and on Linux a
 // /proc that is not the root of a proc file system or not this pid namespace's own: the error then
