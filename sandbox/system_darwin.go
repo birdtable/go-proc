@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -36,8 +37,22 @@ func programHere() programRule {
 	return programRule{walks: true, maxLinks: 32, linksHeld: true, interpreters: true}
 }
 
-// mayRunHere is nil when this caller may run the file, as access(2) with X_OK asks the macOS
-// kernel, which refuses the exec with EACCES before any interpreter reads the file: the program
-// runs as the caller, whose own execute bit decides, or its group's, or the others', never the
-// three bits together.
-func mayRunHere(file string) error { return unix.Access(file, unix.X_OK) }
+// mayRunHere is nil when this caller may run the file, as the macOS kernel asks it before any
+// interpreter reads the file, and otherwise why not, wrapping EACCES or the error it was given.
+// The kernel asks two things. The file's mode must have an execute bit, whoever it is for: a file
+// with none it refuses whatever an ACL allows. And faccessat(2) with X_OK and AT_EACCESS, by the
+// effective ids the exec runs with, must say yes: it reads the caller's own bit, never the three
+// together, and the ACL.
+func mayRunHere(file string) error {
+	info, err := os.Stat(file)
+	switch {
+	case err != nil:
+		return err
+	case info.Mode().Perm()&0o111 == 0:
+		return fmt.Errorf("its mode %v has no execute bit, and the kernel runs no such file whatever its ACL allows: %w", info.Mode().Perm(), unix.EACCES)
+	}
+	if err := unix.Faccessat(unix.AT_FDCWD, file, unix.X_OK, unix.AT_EACCESS); err != nil {
+		return fmt.Errorf("faccessat(2) with X_OK, by the effective ids the exec runs with, refuses it: %w", err)
+	}
+	return nil
+}

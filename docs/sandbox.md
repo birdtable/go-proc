@@ -31,19 +31,23 @@ reads nothing and exits 0, so a program behind the block starts no other program
 outside them, a shell's command among them, and a link on the path swapped after the walk fails
 closed, with the system sandbox's exit 71. There RunHolding reads a #! script's first line, with no
 lookup, as the kernel reads it, to the first newline or #, and refuses a script whose interpreter
-is outside the folders; a program env finds is held when env runs it. A file that may run with
-neither #! nor a program's format, which the kernel refuses with ENOEXEC and execvp runs with
-/bin/sh, is refused the same way unless /bin is named: a Mach-O file whose filetype is not
-MH_EXECUTE, a library or an object, among them, and a #! script whose interpreter is no Mach-O
-program, a script itself or a plain file, as the kernel starts no other interpreter for a script.
-The kernel looks that interpreter up under the system sandbox before it refuses it, so the
-interpreter must be beneath the folders as well as /bin/sh, or the script is refused naming its
-folder. With /bin named, such a file and a #!/bin/sh script run, but behind the block /bin/sh cannot read
+is outside the folders; a program env finds is held when env runs it. A file that may run, which
+the kernel refuses with ENOEXEC and execvp runs with /bin/sh, is refused the same way unless /bin
+is named: one with neither #! nor a program's format, a Mach-O file whose filetype is not
+MH_EXECUTE, a library or an object, among them; a #! line with no end in its first 512 bytes, or
+that names no interpreter; and a #! script whose interpreter is no Mach-O program, a script
+itself or a plain file, as the kernel starts no other interpreter for a script. The kernel looks
+that interpreter up under the system sandbox before it refuses it, so the interpreter must be
+beneath the folders as well as /bin/sh, or the script is refused naming its folder. With /bin
+named, such a file and a #!/bin/sh script run, but behind the block /bin/sh cannot read
 /private/var/select/sh, the link that picks the shell it runs: it writes that error to the
-program's standard error and runs its default shell. A file the caller may not run, as access(2)
-with X_OK asks the kernel, which refuses it before any shell or interpreter, is refused whatever
-its first line: a file of mode 0601 that the caller owns among them, as the owner's bits decide
-for the owner.
+program's standard error and runs its default shell. A file the caller may not run, which the
+kernel refuses with EACCES before any shell or interpreter, is refused whatever its first line,
+and so is a script whose interpreter the caller may not run, for which execvp runs no shell. The
+kernel asks two things, and the refusal says which: the file's mode must have an execute bit, as
+a file with none is refused whatever an ACL allows, and faccessat(2) with X_OK, by the effective
+ids the exec runs with, must say yes, as the owner's bits decide for the owner, so a file of mode
+0601 that the caller owns is refused.
 
 ## What the block does not close
 

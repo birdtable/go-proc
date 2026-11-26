@@ -30,14 +30,15 @@ import (
 // link changed after the walk fails there, closed. So on macOS RunHolding refuses such a link
 // first, naming it, and reads a #! script's first line and holds the interpreter it names as it
 // holds a program, with no lookup: a program env finds is held when env runs it. A file that may
-// run and is neither a #! script nor a Mach-O program the kernel refuses with ENOEXEC, and
-// sandbox-exec's execvp runs it with /bin/sh instead, so RunHolding holds /bin/sh for it the same
-// way: a Mach-O file whose filetype is not MH_EXECUTE among them, and a #! script whose
-// interpreter is no Mach-O program, a script itself or any such file, as the kernel starts no
-// other interpreter for a script; it looks that interpreter up first, under the system sandbox, so
-// the interpreter is held too. A file the caller has no right to run, as access(2) asks the
-// kernel, the kernel refuses with EACCES before it reads the file, and execvp runs no shell for
-// it, so RunHolding refuses it first, whatever its first line.
+// run and that the kernel refuses with ENOEXEC, sandbox-exec's execvp runs with /bin/sh instead,
+// so RunHolding holds /bin/sh for it the same way: one that is neither a #! script nor a Mach-O
+// program, a Mach-O file whose filetype is not MH_EXECUTE among them; a #! line with no end in
+// its first 512 bytes or no interpreter; and a #! script whose interpreter is no Mach-O program, a
+// script itself or any such file, as the kernel starts no other interpreter for a script; it
+// looks that interpreter up first, under the system sandbox, so the interpreter is held too. A
+// file the caller has no right to run, as mayRunHere asks the kernel's two questions, the kernel
+// refuses with EACCES before it reads the file, and execvp runs no shell for it, so RunHolding
+// refuses it first, whatever its first line, and a script whose interpreter is such a file.
 
 // walked is a program's path as the kernel follows it: each link it goes through, by its own
 // path, in order, and file, the real file it ends on.
@@ -202,42 +203,47 @@ const maxShebang = 512
 
 // heldInterpreter is nil when the program prog, whose real file is file, may run, and is a Mach-O
 // program or n holds the program that runs it as rule holds a program: a #! script's interpreter,
-// or /bin/sh for a file that is neither, or for a script whose interpreter is no Mach-O program.
-// Otherwise it is ErrUsage: for a file the caller may not run, as access(2) asks the kernel, which
-// refuses it with EACCES before any interpreter; naming the program that runs it; or why that
-// cannot be told. It reads the file's right to run and the first bytes of the file and of a
-// script's interpreter alone, and looks nothing up: a program that env finds is held when env runs
-// it, by the system sandbox.
+// or /bin/sh for a file the kernel refuses with ENOEXEC, which execvp runs with it, and for a
+// script whose interpreter is no Mach-O program, beside that interpreter. Otherwise it is
+// ErrUsage: for a file, or a script's interpreter, the caller may not run, as mayRunHere asks the
+// kernel's two questions, which it refuses with EACCES before any interpreter or shell; naming the
+// program that runs it; or why that cannot be told. It reads the right to run and the first bytes
+// of the file and of a script's interpreter alone, and looks nothing up: a program that env finds
+// is held when env runs it, by the system sandbox.
 func (n named) heldInterpreter(prog, file string, rule programRule) error {
 	if err := mayRunHere(file); err != nil {
-		return fmt.Errorf("the program %q may not run: access(2) says this caller may not run its real file %q (%w), and the kernel refuses its exec before any interpreter reads it: %w", prog, file, err, errUsage)
+		return fmt.Errorf("the program %q may not run, as the kernel refuses the exec of its real file %q before any interpreter reads it: %w: %w", prog, file, err, errUsage)
 	}
 	head, err := firstBytes(file)
 	if err != nil {
 		return heldf(prog, "its first line cannot be read: %v", err)
 	}
-	interp, err := interpreter(head)
+	interp, why, err := interpreter(head)
 	switch {
 	case err != nil:
 		return heldf(prog, "%v", err)
 	case interp == "":
 		return nil
 	}
-	script := bytes.HasPrefix(head, []byte("#!"))
 	w, err := walk(osLinks{}, interp, rule.maxLinks)
 	if err == nil {
 		err = n.heldProgram(interp, w, rule.linksHeld)
 	}
 	switch {
-	case err != nil && script:
+	case err != nil && why == "":
 		return fmt.Errorf("the program %q is a #! script, and its interpreter is held as a program is: %w", prog, err)
 	case err != nil:
-		return fmt.Errorf("the program %q is neither a #! script nor a Mach-O program, so it is run by %s, which is held as a program is: %w", prog, bourneShell, err)
-	case !script:
+		return fmt.Errorf("the program %q %s, so it is run by %s, which is held as a program is: %w", prog, why, bourneShell, err)
+	case why != "":
 		return nil
 	}
-	// The kernel looks the interpreter up, under the system sandbox, before it refuses one that is
-	// no Mach-O program, so the interpreter stays held, and /bin/sh, which execvp then runs, too.
+	// The kernel looks the interpreter up, under the system sandbox, and asks whether the caller may
+	// run it, both before it reads its format: so the interpreter stays held, one the caller may not
+	// run is refused, as execvp runs no shell for EACCES, and /bin/sh is held for one that is no
+	// Mach-O program, which the kernel refuses with ENOEXEC and execvp runs with /bin/sh.
+	if err := mayRunHere(w.file); err != nil {
+		return fmt.Errorf("the program %q is a #! script whose interpreter's real file %q may not run, as the kernel refuses its exec before it reads the interpreter, and execvp runs no shell for it: %w: %w", prog, w.file, err, errUsage)
+	}
 	if ihead, rerr := firstBytes(w.file); rerr != nil || machO(ihead) {
 		return nil
 	}
@@ -299,29 +305,34 @@ func firstBytes(name string) (head []byte, err error) {
 }
 
 // interpreter is the program that runs a file starting with head, as the macOS kernel and execvp
-// tell it. A #! script's is the interpreter on its #! line, read as the kernel reads it: the line
-// ends at the first newline or #, and the interpreter is after the #! and any spaces and tabs, up
-// to the next space or tab. A Mach-O program needs none, "". Any other file, one with no #!, is
-// run by bourneShell. It is an error for a #! line with no end within maxShebang bytes, no
-// interpreter, or one that is not an absolute path.
-func interpreter(head []byte) (string, error) {
+// tell it, and why, when that is bourneShell for a file the kernel refuses with ENOEXEC, which
+// execvp runs with it. A #! script's is the interpreter on its #! line, read as the kernel reads
+// it: the line ends at the first newline or #, and the interpreter is after the #! and any spaces
+// and tabs, up to the next space or tab. A Mach-O program needs none, "". The kernel refuses with
+// ENOEXEC a file with no #! that is no Mach-O program, and a #! line with no end within
+// maxShebang bytes or with no interpreter. It is an error for a #! line to name an interpreter that
+// is not an absolute path.
+func interpreter(head []byte) (interp, why string, err error) {
 	rest, ok := bytes.CutPrefix(head, []byte("#!"))
 	switch {
 	case !ok && machO(head):
-		return "", nil
+		return "", "", nil
 	case !ok:
-		return bourneShell, nil
+		return bourneShell, "is neither a #! script nor a Mach-O program", nil
 	}
 	end := bytes.IndexAny(rest, "#\n")
 	if end < 0 {
-		return "", fmt.Errorf("its #! line has no end within its first %d bytes", maxShebang)
+		return bourneShell, fmt.Sprintf("has a #! line with no end within its first %d bytes, which the kernel refuses with ENOEXEC", maxShebang), nil
 	}
 	line := bytes.TrimLeft(rest[:end], " \t")
 	if at := bytes.IndexAny(line, " \t"); at >= 0 {
 		line = line[:at]
 	}
-	if interp := string(line); path.IsAbs(interp) {
-		return interp, nil
+	switch interp := string(line); {
+	case interp == "":
+		return bourneShell, "has a #! line that names no interpreter, which the kernel refuses with ENOEXEC", nil
+	case path.IsAbs(interp):
+		return interp, "", nil
 	}
-	return "", fmt.Errorf("its #! line names %q, which is not an absolute path", line)
+	return "", "", fmt.Errorf("its #! line names %q, which is not an absolute path", line)
 }

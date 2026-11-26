@@ -224,48 +224,51 @@ func TestAProgramsOwnLibrariesNeverVouchForItsFolder(t *testing.T) {
 // TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt: a #! script's interpreter is the
 // path after #! and any spaces and tabs, up to a space or tab, on a line that ends at a newline or
 // a #, as the macOS kernel reads it. A Mach-O program of 64 or 32 bits whose filetype is
-// MH_EXECUTE, a Mach-O file in the other byte order and a universal file need none, and any other
-// file with no #! is run by /bin/sh, as execvp runs a file the kernel refuses with ENOEXEC: a
-// Mach-O library or object among them, and a Mach-O magic with nothing after it, as the kernel
-// reads a short file padded with zeros, so 14 bytes ending in MH_EXECUTE's low byte are a program.
-// A #! line with no end in the first 512 bytes, an empty one, and a relative interpreter are
-// errors.
+// MH_EXECUTE, a Mach-O file in the other byte order and a universal file need none. A file the
+// kernel refuses with ENOEXEC is run by /bin/sh, as execvp runs it, with the reason: one with no
+// #! that is no Mach-O program, a Mach-O library or object among them, and a Mach-O magic with
+// nothing after it, as the kernel reads a short file padded with zeros, so 14 bytes ending in
+// MH_EXECUTE's low byte are a program; and a #! line with no end in the first 512 bytes, or with
+// no interpreter. A relative interpreter is an error.
 //
 // What it costs when this fails: RunHolding holds a file other than the one the kernel runs as the
-// interpreter, and a script runs one outside the folders, or fails late with exit 71.
+// interpreter, and a script runs one outside the folders, or fails late with exit 71, or a file
+// that runs is turned away.
 func TestAScriptsInterpreterIsReadFromItsFirstLineAsMacOSReadsIt(t *testing.T) {
 	t.Parallel()
+	const neither, noEnd, noInterp = "is neither a #! script nor a Mach-O program", "has a #! line with no end within its first 512 bytes", "has a #! line that names no interpreter"
 	for _, r := range []struct {
-		head, interp, says string
+		head, interp, why, says string
 	}{
-		{"#!/bin/sh\necho", "/bin/sh", ""},
-		{"#! \t/usr/bin/env python3 -u\n", "/usr/bin/env", ""},
-		{"#!/held/run\targ\n", "/held/run", ""},
-		{"#!/held/true#/x\n", "/held/true", ""},
-		{"#!/held/run #" + strings.Repeat("x", 600), "/held/run", ""},
-		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00\x00\x00 a 64-bit Mach-O program", "", ""},
-		{"\xce\xfa\xed\xfe\x07\x00\x00\x00\x03\x00\x00\x00\x02\x00\x00\x00 a 32-bit Mach-O program", "", ""},
-		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00", "", ""},
-		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x06\x00\x00\x00 a 64-bit Mach-O library", "/bin/sh", ""},
-		{"\xce\xfa\xed\xfe\x07\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00 a 32-bit Mach-O object", "/bin/sh", ""},
-		{"\xcf\xfa\xed\xfe a 64-bit Mach-O magic and text", "/bin/sh", ""},
-		{"\xcf\xfa\xed\xfe", "/bin/sh", ""},
-		{"\xfe\xed\xfa\xcf a Mach-O file in the other byte order", "", ""},
-		{"\xca\xfe\xba\xbe a universal file", "", ""},
-		{"exit 0\n", "/bin/sh", ""},
-		{"", "/bin/sh", ""},
-		{" #!/bin/sh\n", "/bin/sh", ""},
-		{"#!/bin/sh", "", "has no end within its first 512 bytes"},
-		{"#!/bin/sh " + strings.Repeat("x", 600) + "\n", "", "has no end within its first 512 bytes"},
-		{"#!\n", "", `names "", which is not an absolute path`},
-		{"#! #/bin/sh\n", "", `names "", which is not an absolute path`},
-		{"#!sh\n", "", `names "sh", which is not an absolute path`},
+		{"#!/bin/sh\necho", "/bin/sh", "", ""},
+		{"#! \t/usr/bin/env python3 -u\n", "/usr/bin/env", "", ""},
+		{"#!/held/run\targ\n", "/held/run", "", ""},
+		{"#!/held/true#/x\n", "/held/true", "", ""},
+		{"#!/held/run #" + strings.Repeat("x", 600), "/held/run", "", ""},
+		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00\x00\x00 a 64-bit Mach-O program", "", "", ""},
+		{"\xce\xfa\xed\xfe\x07\x00\x00\x00\x03\x00\x00\x00\x02\x00\x00\x00 a 32-bit Mach-O program", "", "", ""},
+		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00", "", "", ""},
+		{"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x06\x00\x00\x00 a 64-bit Mach-O library", "/bin/sh", neither, ""},
+		{"\xce\xfa\xed\xfe\x07\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00 a 32-bit Mach-O object", "/bin/sh", neither, ""},
+		{"\xcf\xfa\xed\xfe a 64-bit Mach-O magic and text", "/bin/sh", neither, ""},
+		{"\xcf\xfa\xed\xfe", "/bin/sh", neither, ""},
+		{"\xfe\xed\xfa\xcf a Mach-O file in the other byte order", "", "", ""},
+		{"\xca\xfe\xba\xbe a universal file", "", "", ""},
+		{"exit 0\n", "/bin/sh", neither, ""},
+		{"", "/bin/sh", neither, ""},
+		{" #!/bin/sh\n", "/bin/sh", neither, ""},
+		{"#!/bin/sh", "/bin/sh", noEnd, ""},
+		{"#!/bin/sh " + strings.Repeat("x", 600) + "\n", "/bin/sh", noEnd, ""},
+		{"#!\n", "/bin/sh", noInterp, ""},
+		{"#! \t\n", "/bin/sh", noInterp, ""},
+		{"#! #/bin/sh\n", "/bin/sh", noInterp, ""},
+		{"#!sh\n", "", "", `names "sh", which is not an absolute path`},
 	} {
 		head := []byte(r.head)[:min(len(r.head), maxShebang)]
-		got, err := interpreter(head)
+		got, why, err := interpreter(head)
 		switch {
-		case r.says == "" && (err != nil || got != r.interp):
-			t.Errorf("%q: %q, %v; want %q", r.head, got, err, r.interp)
+		case r.says == "" && (err != nil || got != r.interp || !strings.HasPrefix(why, r.why) || (why == "") != (r.why == "")):
+			t.Errorf("%q: %q, %q, %v; want %q and a reason starting %q", r.head, got, why, err, r.interp, r.why)
 		case r.says != "" && (err == nil || !strings.Contains(err.Error(), r.says)):
 			t.Errorf("%q: %q, %v; want an error saying %q", r.head, got, err, r.says)
 		}
