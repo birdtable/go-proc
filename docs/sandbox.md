@@ -33,8 +33,11 @@ closed, with the system sandbox's exit 71. There RunHolding reads a #! script's 
 lookup, as the kernel reads it, to the first newline or #, and refuses a script whose interpreter
 is outside the folders; a program env finds is held when env runs it. A file that may run with
 neither #! nor a program's format, which the kernel refuses and execvp runs with /bin/sh, is
-refused the same way unless /bin is named. A file with no execute bit, which the kernel refuses
-before any shell or interpreter, is refused whatever its first line.
+refused the same way unless /bin is named. With /bin named, such a file and a #!/bin/sh script
+run, but behind the block /bin/sh cannot read /private/var/select/sh, the link that picks the
+shell it runs: it writes that error to the program's standard error and runs its default shell. A
+file with no execute bit, which the kernel refuses before any shell or interpreter, is refused
+whatever its first line.
 
 ## What the block does not close
 
