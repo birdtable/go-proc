@@ -26,8 +26,11 @@ func TestMacOSHoldsTheProgramAndEveryLinkOnItsPath(t *testing.T) {
 
 // TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders: a copy of the test binary in the
 // folder held, run by RunHolding as a starter, cannot start /bin/echo or a copy of true in a folder
-// not held, and starts the copy of true in the folder held, which exits 0. (A copy of env is killed
-// by macOS outside any sandbox, so the starter is the test binary.) A #! script in the folder held
+// not held, and starts the copy of true in the folder held, which exits 0. Nor can it start a
+// script in the folder held whose interpreter is /bin/sh, or whose #! line is /bin/sh, a # and the
+// copy of true in the folder held: the system sandbox holds the interpreter a script names, which
+// RunHolding does not read for a program the one it runs starts. (A copy of env is killed by macOS
+// outside any sandbox, so the starter is the test binary.) A #! script in the folder held
 // whose interpreter is /bin/sh is ErrUsage from RunHolding and Check, naming /bin/sh, before
 // anything is set; one whose interpreter is the copy of true in the folder held runs, and so does
 // one whose #! line goes on after a # with a path outside, which the kernel ends at the #. A link
@@ -44,6 +47,12 @@ func TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	run, inside, outside := copyOf(t, self, held), copyProgram(t, held), copyProgram(t, other)
+	script, shHashScript := filepath.Join(held, "script"), filepath.Join(held, "shhashscript")
+	for p, body := range map[string]string{script: "#!/bin/sh\nexit 0\n", shHashScript: "#!/bin/sh#" + inside + "\n"} {
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, r := range []struct {
 		claim string
 		args  []string
@@ -52,6 +61,8 @@ func TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders(t *testing.T) {
 		{"/bin/echo", []string{"/bin/echo", "started"}, starterRefused},
 		{"a copy of true outside the folders", []string{outside}, starterRefused},
 		{"a copy of true in the folder held", []string{inside}, 0},
+		{"a #!/bin/sh script in the folder held", []string{script}, starterRefused},
+		{"a script in the folder held whose #! line is /bin/sh, a # and the copy of true there", []string{shHashScript}, starterRefused},
 	} {
 		code, said := withArgs(t, run, append([]string{starter}, r.args...)...)
 		if code != r.code || strings.Contains(said, "started\n") {
@@ -59,10 +70,6 @@ func TestBehindTheMacBlockAProgramStartsOnlyProgramsInTheFolders(t *testing.T) {
 		}
 	}
 
-	script := filepath.Join(held, "script")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
 	says := `the program "/bin/sh" cannot be held: it is the file "/bin/sh", whose folder "/bin" no folder held reaches`
 	if _, err := Check(Folders{ReadOnly: []string{held}}, script); !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || !strings.Contains(err.Error(), says) {
 		t.Errorf("Check of a script whose interpreter is not held: %v, want ErrUsage, never ErrNoBlock, and %q", err, says)
