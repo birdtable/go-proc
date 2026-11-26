@@ -1,0 +1,3 @@
+kind: Security
+body: 'sandbox: `api/contract.txt` now promises what RunHolding''s files block does to a real program, on all three systems, where it promised before only what the block asks of the kernel. `TestAProgramBehindRunHoldingReadsAndWritesBeneathItsFoldersAlone` runs the system''s own copy program behind RunHolding: it copies a file beneath a read-only folder into a read-write one, and is refused a file outside the folders, a copy into a folder outside them and a copy into the read-only folder. The same copies made with no block are its control. Where Check says the system gives no block, as on Windows, RunHolding refuses each run before the program starts and nothing is copied. No product code changes.'
+time: 2026-11-26T04:55:00.000000+00:00
