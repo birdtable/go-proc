@@ -26,6 +26,8 @@ func (osFiles) object(name string) (o object, err error) {
 	return readObject(f, uint64(os.Getpagesize())) //nolint:gosec // G115: a page size is above 0
 }
 
-// loadHere is the folders prog needs to load on this system: its loader's and its libraries', by
-// the loader's own search.
-func loadHere(prog string) ([]string, error) { return loadFolders(osFiles{}, builtArch, prog) }
+// loadHere is the folders prog, whose real file is real, needs to load on this system: its
+// loader's and its libraries', by the loader's own search from that file.
+func loadHere(prog, real string) ([]string, error) {
+	return loadFoldersOf(osFiles{}, builtArch, prog, real)
+}

@@ -68,6 +68,12 @@
 // is its owner's and its writers' to do, and so the caller's judgment of them, of the loader's and
 // the libraries' files as of the program's.
 //
+// The program is held as a file like any other: its real file, and on macOS every symbolic link on
+// its path, must be beneath a folder held, the added ones included, or it is ErrUsage naming the
+// folder, which RunHolding never adds (Folders says why each system needs it). On macOS this is
+// RunHolding's own check, not the system sandbox's, and a link swapped after it walked the path is
+// the same owner's and writers' to do.
+//
 // Every error of Run that says the block could not be set matches ErrNoBlock,
 // and a program that could not be started behind a block that was set does
 // not, so a caller tells the two apart with errors.Is, never by the text. So
@@ -97,7 +103,8 @@ import (
 
 // ErrUsage is Run or RunHolding given a program not named by its absolute
 // path, or a folder RunHolding or Check would not hold, or a program whose
-// load folders they cannot tell. Nothing is set or run.
+// load folders they cannot tell, or one the folders do not hold. Nothing is
+// set or run.
 var ErrUsage = errors.New("the block does not take it, so nothing is set or run")
 
 // ErrNoBlock is matched, with errors.Is, by every error of Run and Check that says the block could
@@ -198,7 +205,13 @@ func blockOn(goos string) Block {
 // Folders are the folders a program behind RunHolding's block may reach, each by its absolute path:
 // beneath ReadWrite it reads, runs, writes, makes and removes, and beneath ReadOnly it reads and
 // runs. Every other file is denied, reads included. The program itself is a file like any other, so
-// its folder is among them. The folders of its loader and libraries are not: RunHolding adds them.
+// its folder is among them: the folder of its real file, the one its path ends on once every
+// symbolic link on it is followed, and on macOS the folder of each of those links too, as the
+// system sandbox refuses to follow a link it does not reach. RunHolding and Check walk the path and
+// refuse with ErrUsage a program these folders do not hold, naming the folder; they never add it.
+// On Linux Landlock holds the exec of the real file as well. On macOS the system sandbox does not
+// hold a program's exec, so the hold of the program is RunHolding's own check, of the path as it
+// walked it. The folders of its loader and libraries are not the caller's: RunHolding adds them.
 type Folders struct {
 	ReadWrite []string
 	ReadOnly  []string
@@ -207,8 +220,10 @@ type Folders struct {
 // RunHolding is Run with the program's files held to folders. It takes at least one folder: Run is
 // the block that leaves the files open. A folder that is not an absolute path, does not exist or is
 // not a folder, one named twice, under any name, and a read-only folder beneath a read-write one,
-// which could be written, are ErrUsage, and nothing is set or run. Every error that says the block
-// could not be set matches ErrNoBlock, as Run's.
+// which could be written, are ErrUsage, and nothing is set or run. So is a program whose real file
+// no folder reaches, or, on macOS, one whose path goes through a link in a folder none reaches, as
+// Folders says, once the load folders are added. Every error that says the block could not be set
+// matches ErrNoBlock, as Run's.
 //
 // To the folders it adds, read-only, those the program needs to load, which no caller names. On
 // Linux they are the folder of its loader and of each library it needs, by their real paths, as
@@ -231,15 +246,16 @@ func RunHolding(f Folders, path string, args, environ []string) error {
 	if err != nil {
 		return err
 	}
-	if n, err = loading(n, path); err != nil {
+	if n, err = program(n, path); err != nil {
 		return err
 	}
 	return runHere(n, path, argv, environ)
 }
 
-// loading is n with the folders the program at path needs to load, as this system answers them.
-func loading(n named, path string) (named, error) {
-	dirs, err := loadHere(path)
+// loading is n with the folders the program at path, whose real file is real, needs to load, as
+// this system answers them.
+func loading(n named, path, real string) (named, error) {
+	dirs, err := loadHere(path, real)
 	if err != nil {
 		return named{}, err
 	}
@@ -277,7 +293,7 @@ func Check(f Folders, path string) (Block, error) {
 			n, err = holding(f)
 		}
 		if err == nil {
-			n, err = loading(n, path)
+			n, err = program(n, path)
 		}
 		if err != nil {
 			return Block{}, err

@@ -42,7 +42,7 @@ func LoadChild(args []string) (int, bool) {
 			if err != nil {
 				return err
 			}
-			dirs, err := loadHere(prog)
+			dirs, err := loadHere(prog, prog)
 			if err != nil {
 				return err
 			}

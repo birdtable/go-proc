@@ -22,4 +22,9 @@ func blockHere() Block { return blockOn("darwin") }
 // into the program and no file read opens, and the profile gives back the read of the root
 // folder's own list, which the system sandbox needs to start a program. A library outside the
 // shared cache, in a folder that is not the program's, is the caller's to name.
-func loadHere(string) ([]string, error) { return nil, nil }
+func loadHere(string, string) ([]string, error) { return nil, nil }
+
+// programHere is how the macOS block holds the program: its path walked, with the 32 links of
+// MAXSYMLINKS, its real file beneath a folder, which is RunHolding's own check here, and every link
+// on the path beneath one too, as the system sandbox refuses to follow any other.
+func programHere() programRule { return programRule{walks: true, maxLinks: 32, linksHeld: true} }

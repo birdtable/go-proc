@@ -13,6 +13,18 @@ process outside the block reads later, a shell's profile or a git hook beneath a
 is protected. A kernel at Landlock ABI 6 or later without erratum 2 is taken for one with no block,
 since go-landlock takes it for ABI 5 and cannot make the ruleset with the scopes.
 
+With RunHolding the program itself is held to the folders, as a file like any other. Its real file,
+where its path ends once each symbolic link on it is followed, must be beneath a folder held, the
+load folders RunHolding adds included, and on macOS so must each link on the way. RunHolding and
+Check walk the path before anything is set and refuse a program the folders do not hold with
+ErrUsage, naming the folder it would need; they never add that folder, since it would widen the
+block. On Linux Landlock holds the exec of the real file too, so the walk only says before the run
+what the kernel would refuse after it. On macOS the system sandbox does not hold a program's exec:
+a program in a folder no profile grants runs. There the hold of the program is RunHolding's own
+check, of the path as it walked it, and a link on the path swapped after the walk, by the program's
+owner or one who can write its folders, moves the program out of the folders unseen, as a file
+swapped after it was read moves a load folder.
+
 ## What the block does not close
 
 
@@ -33,7 +45,8 @@ since go-landlock takes it for ABI 5 and cannot make the ruleset with the scopes
     LD_LIBRARY_PATH, LD_PRELOAD or LD_AUDIT finds is not found, and neither is one a program opens
     by dlopen once it runs: its folder is the caller's to name. On macOS name the program by its
     real path, since a link on the way to it outside the folders (/var, /tmp and /etc are links)
-    cannot be followed, and a library outside dyld's shared cache is the caller's to name.
+    cannot be followed, and RunHolding refuses it with ErrUsage; a library outside dyld's shared
+    cache is the caller's to name.
   - The block takes no user namespace and no mount namespace, so a program sees every file's real
     owner, and it scrubs no *_SOCK or *_HOST variable from the environment: a variable only names a
     socket, which the block refuses.

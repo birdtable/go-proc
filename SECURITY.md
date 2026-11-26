@@ -39,6 +39,9 @@ not a jail. These are documented, and not a vulnerability on their own:
 - on Windows, a process that a system service starts on a child's behalf (WMI, Task Scheduler);
 - on Windows, a process of the tree that duplicates its job's handle from the caller, which keeps
   the job, and itself, alive after the caller exits, and lets it allow breakaway, clear
-  kill-on-close or lift the job's limits.
+  kill-on-close or lift the job's limits;
+- on macOS, a program of `sandbox.RunHolding` that runs from outside its folders because a
+  symbolic link on its path was swapped after RunHolding walked the path: the system sandbox does
+  not hold a program's exec there, so that hold is RunHolding's own check, as of the walk.
 
 If you find a way around a bound the docs say *is* held, that is one.
