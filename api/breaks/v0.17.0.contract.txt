@@ -1,0 +1,1 @@
+sandbox	TestTheMacBlockHoldingFilesPassesEachFolderAsAParameter	darwin	On macOS, the files profile denies reading and writing everywhere but the root folder's own entry, then allows reading beneath each read-only folder and reading and writing beneath each read-write one, each folder passed to sandbox-exec as a parameter, never written into the profile.
