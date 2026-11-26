@@ -687,3 +687,8 @@ linters:
       - path: (^|/)tools/gate/main\.go$
         linters: [forbidigo]
         text: "go\\.concurrency\\.1:"
+      # cli.errors.3: tools/gate/main.go hands the process's stdout and stderr to run, as a command's main
+      # wires the streams.
+      - path: (^|/)tools/gate/main\.go$
+        linters: [forbidigo]
+        text: "cli\\.errors\\.3:"
