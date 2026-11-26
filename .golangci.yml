@@ -702,3 +702,8 @@ linters:
       - path: (^|/)tools/gate/[^/]+\.go$
         linters: [depguard]
         text: "cli\\.config\\.7:"
+      # arch.ports.1, arch.ports.23: tools/gate asks which system it is on where a member does: namespace
+      # runs on Linux alone, and the budget's row is the host's. The module's host layer is what it gates.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [forbidigo]
+        text: "arch\\.ports\\.1, arch\\.ports\\.23:"
