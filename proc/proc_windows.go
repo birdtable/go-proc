@@ -195,10 +195,16 @@ func (g *group) run() error {
 // the assignment, leaves the process suspended with no parent, in no job of its own. Measured on
 // GitHub's windows-latest runner with the race detector, the window is about 5 ms of a 6 ms start,
 // nearly all of it inside exec's Start: of 100 callers each of Start and of Run killed 0 to 9.9 ms
-// after they began, 43 and 46 left a process so, every one killed 1.1 to 6.1 ms in. os/exec gives no
-// way to start it inside job, and the start that would leave no window, a stub made suspended in job
-// by CreateProcess's job list and the program started by exec with the stub as its parent
-// (SysProcAttr.ParentProcess), is not taken: security tools flag a parent set so as a spoofed
+// after they began, 43 and 46 left a process so, every one killed 1.1 to 6.1 ms in. No order of
+// calls after exec's Start can shrink it. A process left so runs nothing: it stays suspended, with
+// no parent and out of the job that would end it, until `taskkill /f /pid <pid>` ends it or the
+// session it runs in ends.
+//
+// os/exec gives no way to start it inside job. A start of go-proc's own, the process made in job by
+// CreateProcess's job list, would close the window; it makes Tree.Leader a type of go-proc's own,
+// an API change left to the review before v1.0.0. The start that would close it within os/exec, a
+// stub made suspended in job by the job list and the program started by exec with the stub as its
+// parent (SysProcAttr.ParentProcess), is not taken: security tools flag a parent set so as a spoofed
 // parent, and the program's parent pid would name the ended stub, not the caller. started is whether
 // cmd started; an error with it is a process not in job, suspended, which the caller ends and reaps.
 func startHeld(job windows.Handle, cmd *process) (started bool, err error) {
