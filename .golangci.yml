@@ -683,3 +683,7 @@ linters:
       - path: (^|/)tools/gate/main\.go$
         linters: [forbidigo]
         text: "go\\.errors\\.4:"
+      # go.concurrency.1: tools/gate/main.go makes the root context, the one a command's main makes.
+      - path: (^|/)tools/gate/main\.go$
+        linters: [forbidigo]
+        text: "go\\.concurrency\\.1:"
