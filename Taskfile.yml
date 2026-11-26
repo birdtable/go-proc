@@ -59,12 +59,16 @@ tasks:
   # vet also type-checks linux/mips64le, where syscall.Stat_t.Dev is 32 bits, not the 64 of every
   # system above: a compare of st.Dev with a uint64 that has no conversion then fails the tier, not a
   # consumer's build. Vet type-checks every file, so the
-  # build matrix need not take it.
+  # build matrix need not take it. tools/gate, a module of its own that ./... does not read, is vetted
+  # on the same six, so a file of it built for one system alone fails here, on any host.
   vet:
-    desc: go vet for each system, and linux/mips64le for its 32-bit Stat_t.Dev
+    desc: go vet for each system, of the module and of tools/gate, and linux/mips64le for its 32-bit Stat_t.Dev
     cmds:
       - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
         cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go vet ./...
+        timeout: 5m
+      - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
+        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go -C tools/gate vet ./...
         timeout: 5m
       - cmd: CGO_ENABLED=0 GOOS=linux GOARCH=mips64le go vet ./...
         timeout: 5m
@@ -87,17 +91,23 @@ tasks:
       - cmd: CGO_ENABLED=0 go -C tools/gate test -count=1 ./...
         timeout: 5m
 
+  # build builds tools/gate too, on the same six, by the gate step of that name: go build of its lone
+  # main package writes a binary, so the step builds each into a folder of the system's temporary
+  # folder and removes it, and nothing lands in the tree.
   build:
-    desc: go build for each system
+    desc: go build for each system, of the module and of tools/gate
     cmds:
       - for: { matrix: { OS: [linux, darwin, windows], ARCH: [amd64, arm64] } }
         cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build ./...
         timeout: 5m
+      - cmd: '{{.GATE}} build'
+        timeout: 5m
 
   # lint's timeout is 20m: on a cold Windows release runner its three golangci-lint runs share 4 cores
-  # with the race tests, and 10m was too short there.
+  # with the race tests, and 10m was too short there. It lints tools/gate on the three as well, by the
+  # top's .golangci.yml, whose This-repo rows for tools/gate are each one linter and one reason.
   lint:
-    desc: golangci-lint for each of the three systems, run together
+    desc: golangci-lint for each of the three systems, of the module and of tools/gate, run together
     cmds:
       - cmd: '{{.GATE}} lint'
         timeout: 20m

@@ -22,6 +22,7 @@ func TestBudgetRefusesATierStepOrRunItDoesNotKnow(t *testing.T) {
 		{"budget", "pre-commit", "stop", "1"}, {"budget", "pre-commit", "start"}, {"budget", "release", "end"},
 		{"budget", "pre-commit", "start", "0"}, {"budget", "pre-commit", "start", "012"}, {"budget", "pre-commit", "start", "x1"},
 		{"budget", "pre-commit", "end", "-1"}, {"budget", "pre-commit", "start", "1", "2"}, {"budget", "pre-push", "cpu", "1"},
+		{"budget", "pre-commit", "start", "1 2"}, {"budget", "pre-commit", "end", "../1"}, {"budget", "pre-commit", "start", "18446744073709551616"},
 	} {
 		var out, errs bytes.Buffer
 		if code := run(context.Background(), args, &out, &errs); code != 2 {

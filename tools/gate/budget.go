@@ -48,11 +48,11 @@ import (
 // release session's budget is not applied there.
 
 // budgetTiers are the tiers the step times.
-var budgetTiers = []string{"pre-commit", "pre-push", "release"}
+func budgetTiers() []string { return []string{"pre-commit", "pre-push", "release"} }
 
 // sessionHosts are the kinds of host a release session runs on, where a release off a hosted runner
 // is held to release-budget-session.
-var sessionHosts = []string{"linux-amd64", "windows-amd64"}
+func sessionHosts() []string { return []string{"linux-amd64", "windows-amd64"} }
 
 // coldNote follows a red of the CPU step. hatch adds no --advice under --cpu, so the note is the
 // step's own. Every red of hatch exits 1, a member's failure as much as an overrun, so the note says
@@ -104,18 +104,36 @@ func budgetStep(ctx context.Context, args []string, stdout, stderr io.Writer) er
 }
 
 func (b *budgeter) run(ctx context.Context, args []string) error {
-	if len(args) < 2 || !slices.Contains(budgetTiers, args[0]) {
+	// The start file's name is made of the step's own words, the tier as budgetTiers spells it and the
+	// run as a number, never of an argument's text, so no argument names a path.
+	tier := ""
+	if len(args) >= 2 {
+		for _, t := range budgetTiers() {
+			if t == args[0] {
+				tier = t
+			}
+		}
+	}
+	if tier == "" {
 		fmt.Fprintf(b.stderr, "gate: budget takes a tier, pre-commit, pre-push or release, then start or end with the run, or cpu, and was given %q\n", args)
 		return errUsage
 	}
-	tier, which := args[0], args[1]
+	which := args[1]
 	switch which {
 	case "start", "end":
-		if len(args) != 3 || !wholeNumber(args[2]) {
+		// The run is go-task's pid, one argument of whole digits that fits 64 bits. Joined, two
+		// arguments hold a space, which wholeNumber refuses as it refuses a leading 0, so 0 is no run.
+		var run uint64
+		if rest := strings.Join(args[2:], " "); wholeNumber(rest) {
+			if n, err := strconv.ParseUint(rest, 10, 64); err == nil {
+				run = n
+			}
+		}
+		if run == 0 {
 			fmt.Fprintf(b.stderr, "gate: budget %s %s takes the run, go-task's pid ($$), and was given %q\n", tier, which, args[2:])
 			return errUsage
 		}
-		f := filepath.Join(b.starts, tier+"."+args[2])
+		f := filepath.Join(b.starts, tier+"."+strconv.FormatUint(run, 10))
 		if which == "start" {
 			return b.start(ctx, f)
 		}
@@ -144,19 +162,19 @@ func wholeNumber(s string) bool {
 // number parser reads (1e9, 0x20) passes for a load.
 var loadShape = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?)?$`)
 
-// path is p under the top, or p when it is absolute.
+// path is p under the top, or p when it is absolute, cleaned.
 func (b *budgeter) path(p string) string {
 	if filepath.IsAbs(p) {
-		return p
+		return filepath.Clean(p)
 	}
-	return filepath.Join(b.top, p)
+	return filepath.Clean(filepath.Join(b.top, p))
 }
 
 // hatch runs hatch budget with args at the top, its lines going to the step's.
 func (b *budgeter) hatch(ctx context.Context, stdout io.Writer, args ...string) error {
 	c := command(ctx, nil, "go", append([]string{"tool", "-modfile=tools/hatch.mod", "hatch", "budget"}, args...)...)
 	c.Dir = b.top
-	c.Stdout, c.Stderr = stdout, b.stderr
+	c.Stdout, c.Stderr = child(stdout), child(b.stderr)
 	return exited(c.Run())
 }
 
@@ -239,7 +257,7 @@ func endRow(tier, host, named string, hosted bool) string {
 	switch {
 	case host == named:
 		return tier + "-budget"
-	case tier == "release" && !hosted && slices.Contains(sessionHosts, host):
+	case tier == "release" && !hosted && slices.Contains(sessionHosts(), host):
 		return "release-budget-session"
 	}
 	return ""
@@ -325,7 +343,7 @@ func (b *budgeter) cpu(ctx context.Context, tier string) error {
 	if b.host != named {
 		c := command(ctx, nil, members[0], members[1:]...)
 		c.Dir = b.top
-		c.Stdout, c.Stderr = b.stdout, b.stderr
+		c.Stdout, c.Stderr = child(b.stdout), child(b.stderr)
 		if err := exited(c.Run()); err != nil {
 			return err
 		}
