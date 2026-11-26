@@ -717,3 +717,9 @@ linters:
       - path: (^|/)tools/gate/[^/]+\.go$
         linters: [gosec]
         text: "G204:"
+      # go.errors.1: every line tools/gate writes goes through a kept writer of tools/gate/main.go's
+      # runSteps, which keeps the first write that failed and turns a step that held red, so no single
+      # print of fmt is checked again. TestALineTheGateCouldNotWriteTurnsItsExitRed holds it.
+      - path: (^|/)tools/gate/[^/]+\.go$
+        linters: [errcheck]
+        text: "Error return value of `fmt\\.Fprint(f|ln)?` is not checked"
