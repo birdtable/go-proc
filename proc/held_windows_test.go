@@ -152,19 +152,19 @@ func TestACallerKilledAsItStartsLeavesNoProcessOnceItIsInItsJob(t *testing.T) {
 	for _, kind := range []string{"start", "run"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
-			orphans := 0
-			var guarded []time.Duration
+			var orphaned, guarded []time.Duration
 			for i := range raceRuns {
-				o := raceOnce(t, kind, time.Duration(i)*raceStep)
+				delay := time.Duration(i) * raceStep
+				o := raceOnce(t, kind, delay)
 				if o.orphan {
-					orphans++
+					orphaned = append(orphaned, delay)
 				}
 				if o.guarded > 0 {
 					guarded = append(guarded, o.guarded)
 				}
 			}
-			t.Logf("%s: %d callers killed 0 to %v after the go; %d left a process suspended with no job; go to guard %s",
-				kind, raceRuns, (raceRuns-1)*raceStep, orphans, spread(guarded))
+			t.Logf("%s: %d callers killed 0 to %v after the go; %d left a process suspended with no job, killed at %s; go to guard %s",
+				kind, raceRuns, (raceRuns-1)*raceStep, len(orphaned), spread(orphaned), spread(guarded))
 		})
 	}
 }
@@ -210,7 +210,7 @@ func raceOnce(t *testing.T, kind string, delay time.Duration) raceOutcome {
 	if err := endTestProcess(caller); err != nil {
 		t.Fatalf("killing the caller: %v", err)
 	}
-	ended := exitOf(t, caller)
+	born, ended := lifeOf(t, caller)
 	_ = caller.Wait() // reaped; its exit is the kill's
 	rest, err := io.ReadAll(br)
 	if err != nil {
@@ -231,7 +231,7 @@ func raceOnce(t *testing.T, kind string, delay time.Duration) raceOutcome {
 			t.Fatalf("the race helper wrote %q after go, want a guarded line, then a resumed line, or less", rest)
 		}
 	}
-	for pid, h := range childrenOf(t, caller.Process.Pid, ended, filepath.Base(exe)) {
+	for pid, h := range childrenOf(t, caller.Process.Pid, born, ended, filepath.Base(exe)) {
 		switch {
 		case pid == guardedPid && resumed:
 			// may outlive the kill once the guard is lifted, as a detached tree does; ended at the test's end
@@ -252,8 +252,8 @@ func raceOnce(t *testing.T, kind string, delay time.Duration) raceOutcome {
 // left in the window never ends, and a wait of endsWithin for each would cost the run minutes.
 const orphanGrace = 2 * time.Second
 
-// exitOf waits for the killed process c to end and gives when it did.
-func exitOf(t *testing.T, c *process) windows.Filetime {
+// lifeOf waits for the killed process c to end and gives when it was made and when it ended.
+func lifeOf(t *testing.T, c *process) (born, ended windows.Filetime) {
 	t.Helper()
 	var creation, exit, kernel, user windows.Filetime
 	var timed error
@@ -265,14 +265,15 @@ func exitOf(t *testing.T, c *process) windows.Filetime {
 	if err = errors.Join(err, timed); err != nil {
 		t.Fatalf("reading when the caller ended: %v", err)
 	}
-	return exit
+	return creation, exit
 }
 
-// childrenOf gives a handle of each process whose parent pid is parent, made no later than ended,
-// parent's end, and whose program file is named image, by its pid: the processes parent made, and
-// not those of a later process that took its pid. Each is ended, if it still runs, and closed at the
+// childrenOf gives a handle of each process whose parent pid is parent, made from born, parent's
+// making, to ended, its end, and whose program file is named image, by its pid: the processes parent
+// made, and not those of an earlier or a later process that had its pid, as an earlier caller whose
+// orphan still waits for the test's end may have. Each is ended, if it still runs, and closed at the
 // test's end.
-func childrenOf(t *testing.T, parent int, ended windows.Filetime, image string) map[int]windows.Handle {
+func childrenOf(t *testing.T, parent int, born, ended windows.Filetime, image string) map[int]windows.Handle {
 	t.Helper()
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
@@ -291,8 +292,8 @@ func childrenOf(t *testing.T, parent int, ended windows.Filetime, image string) 
 			continue // gone since the list was taken
 		}
 		var creation, exit, kernel, user windows.Filetime
-		if err := windows.GetProcessTimes(h, &creation, &exit, &kernel, &user); err != nil || creation.Nanoseconds() > ended.Nanoseconds() {
-			_ = windows.CloseHandle(h) // not parent's: made after it ended, or not read
+		if err := windows.GetProcessTimes(h, &creation, &exit, &kernel, &user); err != nil || creation.Nanoseconds() < born.Nanoseconds() || creation.Nanoseconds() > ended.Nanoseconds() {
+			_ = windows.CloseHandle(h) // not parent's: made before it or after it ended, or not read
 			continue
 		}
 		t.Cleanup(func() { endHeld(h) })
