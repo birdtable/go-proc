@@ -23,7 +23,9 @@ what the kernel would refuse after it. On macOS the system sandbox does not hold
 a program in a folder no profile grants runs. There the hold of the program is RunHolding's own
 check, of the path as it walked it, and a link on the path swapped after the walk, by the program's
 owner or one who can write its folders, moves the program out of the folders unseen, as a file
-swapped after it was read moves a load folder.
+swapped after it was read moves a load folder. On macOS a #! script is not refused, and the hold
+covers the script's own file and the links to it, not the interpreter its first line names: RunHolding
+does not read that line there, and the system sandbox does not hold that exec either.
 
 ## What the block does not close
 
