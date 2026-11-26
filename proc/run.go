@@ -10,7 +10,9 @@
 // kill-on-close or lift the job's limits. A process of the caller's user, in a Start tree or not,
 // that duplicates the tree's job handle, marks it inheritable or opens the job by name keeps the
 // tree's id live past the leader's reap: a Stop then ends what is left of that tree and returns
-// nil, not ErrStale. Only that tree's own job opens, as its name is random.
+// nil, not ErrStale. Only that tree's own job opens, as its name is random. On Windows a caller
+// killed after Windows makes Run's child or Start's leader, inside os/exec's start, and before the
+// next call puts it in its job, leaves it suspended with no parent, in no job that ends it.
 package proc
 
 import (

@@ -172,7 +172,11 @@ func TestAProcessStartedWithEveryInheritableHandleAsATreeStartsLeavesItsIDStale(
 	cmd := exec.Command(exe, helperMode+"tree", "exit", strconv.Itoa(os.Getpid())) //nolint:gosec,noctx // the test binary itself, as a helper; the tree outlives every context
 	cmd.Env, cmd.Stdout, cmd.Stderr = Bare(), w, w
 	var started error
-	tree, err := detachWith(cmd, func() { started = inheritingAll(t) })
+	tree, err := detachWith(cmd, func(s startStage, _ int) {
+		if s == stageFreed {
+			started = inheritingAll(t)
+		}
+	})
 	_ = w.Close()
 	if err != nil {
 		t.Fatal(err)

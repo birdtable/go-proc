@@ -12,7 +12,7 @@ import (
 // change itself raises Ceiling to its measured count, in a commit that says what the added lines
 // are for. The module's size is held there so a pull request past the ceiling fails at its own head,
 // not at the tag.
-const Ceiling = 11763
+const Ceiling = 11867
 
 // Count is the module's size in its two parts: testenv, and the runtime packages, which are every
 // other package Size counts (today proc, sandbox with cmd/netblock, service, load, gitenv and
