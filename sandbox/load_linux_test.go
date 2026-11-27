@@ -121,7 +121,8 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 // folder the kernel will not walk as written, through a folder only root may search, a link loop
 // past the kernel's 40 links or a path past its 4096 bytes: the loader passes that folder over and
 // opens the file in the next, outside the folder held, though the first folder's text reaches a
-// library of that name in it. The first of those is skipped as root, whom the kernel lets search.
+// library of that name in it. As root, whom the kernel lets search a folder of mode 0, the loader
+// opens the library in the folder held through the first, and Check grants it.
 //
 // What it costs when this fails: a program written into a read-write folder names a library in a
 // folder the caller never named, and RunHolding grants the program that folder.
@@ -176,7 +177,7 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 	for _, r := range []struct {
 		name, found string
 		dynamic     []dynEntry
-		notAsRoot   bool
+		shutToRoot  bool
 	}{
 		{"by-full-path", through + "/libx.so", []dynEntry{{elf.DT_NEEDED, through + "/libx.so"}}, false},
 		{"by-run-path", through + "/libx.so", []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, through}}, false},
@@ -186,12 +187,15 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 	} {
 		t.Run(r.name, func(t *testing.T) {
 			t.Parallel()
-			if r.notAsRoot && os.Geteuid() == 0 {
-				t.Skip("skipped as root: root searches a folder of mode 0, so the kernel walks it")
-			}
 			prog := filepath.Join(dir, "bin", r.name)
 			if err := os.WriteFile(prog, elfSpec{interp: []byte(host.interp + "\x00"), dynamic: r.dynamic, exec: true}.bytes(), 0o700); err != nil {
 				t.Fatal(err)
+			}
+			if r.shutToRoot && os.Geteuid() == 0 {
+				if _, err := Check(Folders{ReadWrite: []string{rw}, ReadOnly: []string{filepath.Dir(prog)}}, prog); errors.Is(err, ErrUsage) {
+					t.Errorf("Check as root of a program naming a library %s: %v; want no ErrUsage, the kernel walking the folder to bin's library", r.name, err)
+				}
+				return
 			}
 			says := `the library "` + r.found + `", which "` + prog + `" needs, is the file "` + lib + `", and its folder "` + elsewhere + `" is beneath no folder held`
 			b, err := Check(Folders{ReadWrite: []string{rw}, ReadOnly: []string{filepath.Dir(prog)}}, prog)
