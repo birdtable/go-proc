@@ -348,7 +348,8 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // its full path; one found by the program's run path; one found by a library's run path, in a
 // folder held, that names it by its full path, and one found by that library's own run path; one
 // found through a link in a folder held, by its real file; one in a folder whose name only starts
-// with the folder held; one in /usr/local/lib, a built-in folder of musl's but not of glibc's; and
+// with the folder held; one in /usr/local/lib, a built-in folder of musl's but not of glibc's; one
+// found by its plain name in a built-in folder through a link leading out of it, by its real file; and
 // musl's, found in the next folder of a run path whose first, in the folder held, makes a path of
 // muslPath bytes with the name, which musl never opens. So is one found by a run path whose first
 // folder the kernel walks by short links to a real path past its length limit, which the loader
@@ -436,6 +437,13 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		{
 			"glibc: /usr/local/lib, which is musl's built-in folder and not glibc's", glibc(obj(glibcAMD, "libx.so").run("/usr/local/lib")).file("/usr/local/lib/libx.so", obj("")),
 			`its folder "/usr/local/lib" is beneath no folder held and no built-in folder of the loader`,
+		},
+		{
+			// A plain name with no run path, found in a built-in folder through a link that leads out
+			// of it: judged by the link's real file, as by a full path or a run path.
+			"a library found by its plain name in a built-in folder through a link leading out of it",
+			glibc(obj(glibcAMD, "libx.so")).link(gnuAMD+"/libx.so", "/elsewhere/libx.so").file("/elsewhere/libx.so", obj("")),
+			`the library "` + gnuAMD + `/libx.so", which "` + tool + `" needs, is the file "/elsewhere/libx.so", and its folder "/elsewhere" is beneath no folder held and no built-in folder of the loader`,
 		},
 		{
 			// The loader opens the path as written, and the kernel takes ".." from the link's target,
