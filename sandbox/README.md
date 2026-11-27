@@ -87,8 +87,8 @@ Know these before you rely on it.
   are not looked for: name their folders yourself.
 - **The up-front refusal covers what the load search finds**, not every way a loader can reach a
   library. A program is refused with `ErrUsage` when it, or a library it loads, names a library by
-  an audit or filter tag, when glibc would first look in a `glibc-hwcaps` subfolder beneath no
-  built-in folder, and when the kernel answers a path looked for with an error such as a link loop:
+  an audit or filter tag, under glibc when a folder the search looks in has a `glibc-hwcaps`
+  subfolder beneath no built-in folder, and when the kernel answers a path looked for with an error such as a link loop:
   glibc ends a folder list on such a file in a folder that is there, and passes over a folder it
   cannot walk, and the search refuses both. A library found where a loader's search order differs
   from the search's some other way, such as in the `tls/` and other legacy subfolders of glibc up

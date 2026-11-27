@@ -45,10 +45,10 @@ import (
 // LD_AUDIT are not read either. Each reaches only a folder the caller granted itself, so a
 // library found only by one of them is not found here, and the program is refused.
 //
-// What the search does not follow it refuses, where the loader would load a file the search never
-// judged: a file that names a library by DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY, which
-// glibc loads and musl does not read; on glibc, a folder searched whose glibc-hwcaps subfolder,
-// which glibc looks in first by levels of the machine, is beneath no built-in folder of the loader;
+// What the search does not follow it refuses: any file that names a library by DT_AUDIT,
+// DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY, though glibc reads DT_AUDIT and DT_DEPAUDIT from the
+// program only and musl reads none of the four; on glibc, a folder searched whose glibc-hwcaps
+// subfolder is beneath no built-in folder of the loader;
 // and a path the loader opens that the kernel answers with an error on which a loader stops, not
 // "no such file", "permission denied" or "not a folder": musl stops the whole load there, glibc
 // that file's list, and a link loop and a path past the kernel's length limit are such errors.
