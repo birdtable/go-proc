@@ -88,10 +88,12 @@ Know these before you rely on it.
 - **The up-front refusal covers what the load search finds**, not every way a loader can reach a
   library. A program is refused with `ErrUsage` when it, or a library it loads, names a library by
   an audit or filter tag, when glibc would first look in a `glibc-hwcaps` subfolder beneath no
-  built-in folder, and when a path looked for is one on which a loader stops, such as a link loop.
-  A library found where a loader's search order differs from the search's some other way is not
-  promised refused before the run. Behind the block such a library loads only from the folders the
-  block grants, and from anywhere else fails at load.
+  built-in folder, and when the kernel answers a path looked for with an error such as a link loop:
+  glibc ends a folder list on such a file in a folder that is there, and passes over a folder it
+  cannot walk, and the search refuses both. A library found where a loader's search order differs
+  from the search's some other way, such as in the `tls/` and other legacy subfolders of glibc up
+  to 2.36, is not promised refused before the run. Behind the block such a library loads only from
+  the folders the block grants, and from anywhere else fails at load.
 
 Say what you can prove: on Linux, the program runs with the network closed and its files held to
 the folders you named and the folders its loader and libraries load from. On macOS, it runs under
