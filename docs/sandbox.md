@@ -93,9 +93,11 @@ ids the exec runs with, must say yes, as the owner's bits decide for the owner, 
   - A folder on a file system whose files Landlock cannot match to the folder grants nothing: on
     Docker Desktop's share of the host's files (fakeowner) every file beneath a folder named there
     is refused. That fails closed.
-  - A library only /etc/ld.so.cache, /etc/ld.so.conf, musl's /etc/ld-musl-<arch>.path,
-    LD_LIBRARY_PATH, LD_PRELOAD or LD_AUDIT finds is not found, and neither is a library only in a glibc-hwcaps subfolder, or one a
-    program opens by dlopen once it runs: its folder is the caller's to name. On macOS name the program by its
+  - A library the program needs that only /etc/ld.so.cache, /etc/ld.so.conf, musl's
+    /etc/ld-musl-<arch>.path, LD_LIBRARY_PATH or a glibc-hwcaps subfolder finds is not found, and
+    the program is refused with ErrUsage, whatever folder is named. One that LD_PRELOAD or LD_AUDIT
+    names, or that a program opens by dlopen once it runs, is not looked for: its folder is the
+    caller's to name. On macOS name the program by its
     real path, since a link on the way to it outside the folders (/var, /tmp and /etc are links)
     cannot be followed, and RunHolding refuses it with ErrUsage; a library outside dyld's shared
     cache, and the folder of each program it starts, /bin for a shell, are the caller's to name.

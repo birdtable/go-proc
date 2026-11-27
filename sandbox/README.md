@@ -82,8 +82,9 @@ Know these before you rely on it.
   read-write folder) is not protected.
 - **Linux does not hold a file's metadata** (`stat`), and a descriptor open before the block, a
   standard stream among them, is used as before.
-- **Libraries found only by `LD_LIBRARY_PATH`, `/etc/ld.so.cache` or `dlopen`** are not found.
-  Name their folders yourself.
+- **Libraries found only by `LD_LIBRARY_PATH` or `/etc/ld.so.cache`** are not found, and the
+  program is refused whatever folders are named. Those named by `LD_PRELOAD` or opened by `dlopen`
+  are not looked for: name their folders yourself.
 - **The up-front refusal covers what the load search finds**, not every way a loader can reach a
   library: one named by an audit or filter tag, one in a `glibc-hwcaps` subfolder, and one found
   where a loader's search order differs from the search's are not promised refused before the run. Behind
