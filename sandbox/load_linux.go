@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -10,7 +11,22 @@ import (
 // osFiles is this system's files, as the search for a program's load folders reads them.
 type osFiles struct{}
 
-func (osFiles) resolve(name string) (string, error) { return filepath.EvalSymlinks(name) }
+// resolve is name with every link in it resolved, once the kernel has walked name as written, as
+// the loader's open walks it: a folder on the way the caller cannot search, a path past the kernel's
+// length limit and a walk past its link limit are the kernel's error, never the path EvalSymlinks
+// reads by the text, which asks none of them. A path the kernel walks and EvalSymlinks then cannot,
+// whose real path is past the length limit though each link's text is short, is errUntold: the
+// loader opens the file there.
+func (osFiles) resolve(name string) (string, error) {
+	if _, err := os.Stat(name); err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errUntold, err)
+	}
+	return resolved, nil
+}
 
 // object reads the file at name, which is opened without waiting, so a FIFO put where a library is
 // looked for holds nothing up, and read only when it is a regular file.
