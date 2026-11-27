@@ -75,12 +75,16 @@ type object struct {
 }
 
 // loadFiles is the files the search reads, a seam its rows run by on every system: resolve is a
-// path with every link in it resolved, or the kernel's error for it as written, and object the ELF
-// file at a path.
+// path with every link in it resolved, the kernel's error for it as written, or errUntold for one
+// the kernel walks whose real path cannot be told, and object the ELF file at a path.
 type loadFiles interface {
 	resolve(name string) (string, error)
 	object(name string) (object, error)
 }
+
+// errUntold is a path the kernel walks as written, so the loader opens the file there, whose real
+// path cannot be told, one past the kernel's length limit reached by short links among them.
+var errUntold = errors.New("its real path cannot be told")
 
 // readObject reads r as an ELF file, on a system whose pages are page bytes. Every way r is not
 // one is an error, a panic of debug/elf among them, which is so a refusal and never a crash; a #!
@@ -461,12 +465,11 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 		return nil, noLoadf(s.prog, "%q needs the library %q, a path that is not absolute", by.name, name)
 	}
 	for _, dir := range dirs {
-		found, ok := s.joined(dir, name)
-		if !ok {
-			continue
-		}
-		resolved, err := s.files.resolve(found)
+		found, resolved, err := s.candidate(by, dir, name)
 		if err != nil {
+			return nil, err
+		}
+		if resolved == "" {
 			continue
 		}
 		if s.reals[resolved] {
@@ -489,6 +492,24 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 		return &loaded{object: *o, name: found, by: by, depth: by.depth + 1}, nil
 	}
 	return nil, noLoadf(s.prog, "the library %q, which %q needs, is not found in %q", name, by.name, dirs)
+}
+
+// candidate is the path the loader opens for name in the folder dir and its real path: no real
+// path for a file the loader passes over, unopened or one the kernel will not walk to, and
+// ErrUsage for a file it opens whose real path cannot be told.
+func (s *search) candidate(by *loaded, dir, name string) (found, resolved string, err error) {
+	found, ok := s.joined(dir, name)
+	if !ok {
+		return "", "", nil
+	}
+	resolved, err = s.files.resolve(found)
+	switch {
+	case errors.Is(err, errUntold):
+		return "", "", noLoadf(s.prog, "the library %q, which %q needs, is the file %q, and %v", name, by.name, found, err)
+	case err != nil:
+		return "", "", nil
+	}
+	return found, resolved, nil
 }
 
 // joined is the path the loader opens for name in the folder dir, joined as it joins them and

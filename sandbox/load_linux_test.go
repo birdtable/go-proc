@@ -122,7 +122,10 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 // past the kernel's 40 links or a path past its 4096 bytes: the loader passes that folder over and
 // opens the file in the next, outside the folder held, though the first folder's text reaches a
 // library of that name in it. As root, whom the kernel lets search a folder of mode 0, the loader
-// opens the library in the folder held through the first, and Check grants it.
+// opens the library in the folder held through the first, and Check grants it. A library found by
+// a run path whose first folder the kernel walks by short links to a real path past its 4096 bytes
+// is refused, the loader opening it though its real folder cannot be told, and never passed over
+// for the library of that name in bin, held and the next folder.
 //
 // What it costs when this fails: a program written into a read-write folder names a library in a
 // folder the caller never named, and RunHolding grants the program that folder.
@@ -173,17 +176,28 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 	// will not walk, so the library comes from elsewhere, the next folder, and never from the decoy
 	// in bin, which the folder's text reaches.
 	shut, loop, long := unwalked(t, filepath.Join(dir, "bin"))
+	far := farLinked(t, dir)
 	elsewhere := filepath.Dir(lib)
+	beneathNone := func(found string) func(string) string {
+		return func(prog string) string {
+			return `the library "` + found + `", which "` + prog + `" needs, is the file "` + lib + `", and its folder "` + elsewhere + `" is beneath no folder held`
+		}
+	}
+	untold := func(prog string) string {
+		return `the library "libx.so", which "` + prog + `" needs, is the file "` + far + `/libx.so", and its real path cannot be told`
+	}
 	for _, r := range []struct {
-		name, found string
-		dynamic     []dynEntry
-		shutToRoot  bool
+		name       string
+		says       func(prog string) string
+		dynamic    []dynEntry
+		shutToRoot bool
 	}{
-		{"by-full-path", through + "/libx.so", []dynEntry{{elf.DT_NEEDED, through + "/libx.so"}}, false},
-		{"by-run-path", through + "/libx.so", []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, through}}, false},
-		{"past-a-folder-shut", lib, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, shut + ":" + elsewhere}}, true},
-		{"past-a-link-loop", lib, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, loop + ":" + elsewhere}}, false},
-		{"past-a-path-too-long", lib, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, long + ":" + elsewhere}}, false},
+		{"by-full-path", beneathNone(through + "/libx.so"), []dynEntry{{elf.DT_NEEDED, through + "/libx.so"}}, false},
+		{"by-run-path", beneathNone(through + "/libx.so"), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, through}}, false},
+		{"past-a-folder-shut", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, shut + ":" + elsewhere}}, true},
+		{"past-a-link-loop", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, loop + ":" + elsewhere}}, false},
+		{"past-a-path-too-long", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, long + ":" + elsewhere}}, false},
+		{"through-short-links-too-long", untold, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, far + ":" + filepath.Join(dir, "bin")}}, false},
 	} {
 		t.Run(r.name, func(t *testing.T) {
 			t.Parallel()
@@ -197,7 +211,7 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 				}
 				return
 			}
-			says := `the library "` + r.found + `", which "` + prog + `" needs, is the file "` + lib + `", and its folder "` + elsewhere + `" is beneath no folder held`
+			says := r.says(prog)
 			b, err := Check(Folders{ReadWrite: []string{rw}, ReadOnly: []string{filepath.Dir(prog)}}, prog)
 			if !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || b != (Block{}) || !strings.Contains(err.Error(), says) {
 				t.Errorf("Check of a program naming a library %s: Block %+v, %v; want the zero Block, ErrUsage, never ErrNoBlock, and %q", r.name, b, err, says)
@@ -233,6 +247,37 @@ func unwalked(t *testing.T, bin string) (shut, loop, long string) {
 		t.Fatal(err)
 	}
 	return shut + "/..", filepath.Join(bin, "c0"), bin + strings.Repeat("/x/..", 840)
+}
+
+// farLinked is a folder the kernel walks from bin by two links, each of short text, to a real
+// folder past its 4096 bytes, which holds a libx.so: bin/rp, a link to far and 25 folders of 100
+// bytes, and in that, bb, a link to 25 more. The far folders are made from a root at the first
+// half, whose calls each walk a path of fewer bytes than the limit.
+func farLinked(t *testing.T, dir string) string {
+	t.Helper()
+	deep := func(c string) string { return strings.Repeat(strings.Repeat(c, 100)+"/", 25) }
+	half := filepath.Join(dir, "far", deep("a"))
+	if err := os.MkdirAll(half, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(half)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.MkdirAll(deep("b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile(deep("b")+"libx.so", elfSpec{dynamic: []dynEntry{}}.bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Symlink(deep("b"), "bb"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(half, filepath.Join(dir, "bin", "rp")); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "bin", "rp", "bb")
 }
 
 // systemChild is the exit of the test binary as a program only one system's rows run; this system's
