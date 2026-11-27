@@ -27,9 +27,11 @@ folder among them is refused unless the caller names that folder.
 
 On Linux, a library the program names by its full path, or finds by its run path, is judged by its
 real file, so a link to one is judged by where it leads. One whose real folder is beneath neither a
-folder the caller named nor a built-in folder of the loader (glibc's /lib, /usr/lib and their
-architecture's lib folders; musl's /lib, /usr/local/lib and /usr/lib) is refused with ErrUsage, before
-anything is set, naming the file and its folder; one whose folder is / or /usr itself is refused too.
+folder the caller named nor a built-in folder of the loader (glibc's, by the loader's real folder: in
+its architecture's lib folder, /lib/<multiarch>, /usr/lib/<multiarch>, /lib and /usr/lib; in lib64,
+/lib64 and /usr/lib64; in lib, /lib and /usr/lib; musl's /lib, /usr/local/lib and /usr/lib) is
+refused with ErrUsage, before anything is set, naming the file and its folder; one whose folder is
+/ or /usr itself is refused too.
 Each library the search loads is judged so, by its own needs and run path, not the program's alone,
 so a library in a read-write folder that names /elsewhere/liby.so is refused as the program would be.
 A caller that means such a library names its folder, or one above it. To the search a shared library
