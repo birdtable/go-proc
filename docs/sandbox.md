@@ -39,15 +39,15 @@ refused.
 Apart from that, RunHolding and Check with folders refuse up front, with ErrUsage before anything
 is set and naming the file and its folder, a library outside the caller's folders and the loader's
 built-in folders, as the search finds it. That covers each library the program needs, and each one a
-library it loads needs, by its own needs and run path, named by its full path or found by its
-DT_RPATH or DT_RUNPATH, and judged by its real file, so a link to one is judged by where it leads:
+library it loads needs, by its own needs and run path, by its full path, by a run path, or through
+a link in a built-in folder, and judged by its real file, so a link to one is judged by where it leads:
 a library in a read-write folder that names /elsewhere/liby.so is refused as the program would be.
 A caller that means such a library names its folder, or one above it. To the search a shared
 library is any ET_DYN file without DF_1_PIE, so any such file on a run path counts as one.
 
 The search imitates two loaders' search orders, so it refuses up front what it finds, not every
-way a loader can reach a file. A library the loader reaches some other way is not refused up
-front: one named by an audit or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY), one
+way a loader can reach a file. A library the loader reaches some other way is not promised
+refused up front: one named by an audit or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY), one
 in a glibc-hwcaps subfolder, and one found where a loader's search order differs from the
 search's. Behind the block such a library loads only from the folders above, and from anywhere
 else fails at load, with nothing granted for it.
@@ -94,8 +94,8 @@ ids the exec runs with, must say yes, as the owner's bits decide for the owner, 
     Docker Desktop's share of the host's files (fakeowner) every file beneath a folder named there
     is refused. That fails closed.
   - A library only /etc/ld.so.cache, /etc/ld.so.conf, musl's /etc/ld-musl-<arch>.path,
-    LD_LIBRARY_PATH, LD_PRELOAD or LD_AUDIT finds is not found, and neither is one a program opens
-    by dlopen once it runs: its folder is the caller's to name. On macOS name the program by its
+    LD_LIBRARY_PATH, LD_PRELOAD or LD_AUDIT finds is not found, and neither is a library only in a glibc-hwcaps subfolder, or one a
+    program opens by dlopen once it runs: its folder is the caller's to name. On macOS name the program by its
     real path, since a link on the way to it outside the folders (/var, /tmp and /etc are links)
     cannot be followed, and RunHolding refuses it with ErrUsage; a library outside dyld's shared
     cache, and the folder of each program it starts, /bin for a shell, are the caller's to name.
