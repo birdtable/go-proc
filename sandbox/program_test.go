@@ -197,7 +197,7 @@ func TestAProgramsOwnLibrariesNeverVouchForItsFolder(t *testing.T) {
 		{"$ORIGIN", debian().file(prog, obj(glibcAMD, "libtool.so").run("$ORIGIN")).file("/opt/tool/libtool.so", obj("", "libc.so.6"))},
 		{"a full path", debian().file(prog, obj(glibcAMD, "/opt/tool/libtool.so")).file("/opt/tool/libtool.so", obj("", "libc.so.6"))},
 	} {
-		dirs, err := loadFoldersOf(r.f, "amd64", prog, prog)
+		dirs, err := loadFoldersOf(r.f, "amd64", prog, prog, []string{"/opt/tool"})
 		if want := []string{gnu, "/opt/tool"}; err != nil || !reflect.DeepEqual(dirs, want) {
 			t.Fatalf("%s: the load folders are %q, %v; want %q", r.spelling, dirs, err, want)
 		}
@@ -212,7 +212,7 @@ func TestAProgramsOwnLibrariesNeverVouchForItsFolder(t *testing.T) {
 		}
 	}
 	inLoader := gnu + "/tool"
-	dirs, err := loadFoldersOf(debian().file(inLoader, obj(glibcAMD, "libc.so.6")), "amd64", inLoader, inLoader)
+	dirs, err := loadFoldersOf(debian().file(inLoader, obj(glibcAMD, "libc.so.6")), "amd64", inLoader, inLoader, caller.readWrite)
 	if err != nil {
 		t.Fatal(err)
 	}

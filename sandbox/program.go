@@ -173,7 +173,7 @@ func program(n named, prog string) (named, error) {
 			return named{}, err
 		}
 	}
-	dirs, err := loadHere(prog, w.file)
+	dirs, err := loadHere(prog, w.file, slices.Concat(n.readWrite, n.readOnly))
 	if err != nil {
 		return named{}, err
 	}

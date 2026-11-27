@@ -41,3 +41,7 @@ func TestRunAndCheckRefuseWhereTheSystemGivesNoBlock(t *testing.T) {
 		t.Errorf("Check: Block %+v, and %+v with folders, want nothing closed", b, held)
 	}
 }
+
+// systemChild is the exit of the test binary as a program only one system's rows run; this system's
+// rows run none.
+func systemChild([]string) (int, bool) { return 0, false }

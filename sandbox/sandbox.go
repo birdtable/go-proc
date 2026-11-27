@@ -236,8 +236,10 @@ type Folders struct {
 // the kernel and its loader read it, by its program headers. On Linux a #! script, whose
 // interpreter is the program to run, a file that is no ELF file or names two loaders, a loader
 // that is neither glibc's nor musl's for this machine, a library that is not found, a file found
-// for one that is a program, a search list it cannot follow, and a loader or a library whose real
-// folder is the root or /usr itself, which no load grants, are ErrUsage, naming the file. On macOS
+// for one that is a program, a search list it cannot follow, a loader or a library whose real
+// folder is the root or /usr itself, which no load grants, and a library whose real folder is
+// beneath neither a folder the caller named nor a built-in folder of its loader, which no caller
+// judged, are ErrUsage, naming the file. On macOS
 // nothing is read and none is added: the system's libraries need no folder, and a #! script is not
 // refused, but held to the program that runs it, as Folders says.
 func RunHolding(f Folders, path string, args, environ []string) error {

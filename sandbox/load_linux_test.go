@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"debug/elf"
 	"errors"
 	"os"
 	"path/filepath"
@@ -81,7 +82,7 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 		return p
 	}
 	prog, falseProg := resolved("true"), resolved("false")
-	dirs, err := loadHere(prog, prog)
+	dirs, err := loadHere(prog, prog, []string{filepath.Dir(prog)})
 	if err != nil {
 		t.Fatalf("the load folders of %s: %v", prog, err)
 	}
@@ -107,3 +108,47 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 		}
 	}
 }
+
+// TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet: a program in the
+// folder held, which names this system's loader and a library in another folder by its full path,
+// is ErrUsage from Check, naming the library and its folder, with the zero Block, and RunHolding,
+// in a process of its own, refuses it the same way. With the library's folder held too, Check does
+// not refuse it with ErrUsage: the folders the caller names are what the search is given.
+//
+// What it costs when this fails: a program written into a read-write folder names a library in a
+// folder the caller never named, and RunHolding grants the program that folder.
+func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *testing.T) {
+	t.Parallel()
+	trueFile, err := filepath.EvalSymlinks("/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := osFiles{}.object(trueFile)
+	if err != nil || host.interp == "" {
+		t.Fatalf("this system's true names no loader to copy: %q, %v", host.interp, err)
+	}
+	dir := realTemp(t, "bin", "elsewhere", "rw")
+	prog, lib := filepath.Join(dir, "bin", "prog"), filepath.Join(dir, "elsewhere", "libx.so")
+	if err := os.WriteFile(lib, elfSpec{dynamic: []dynEntry{}}.bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prog, elfSpec{interp: []byte(host.interp + "\x00"), dynamic: []dynEntry{{elf.DT_NEEDED, lib}}, exec: true}.bytes(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	says := `the library "` + lib + `", which "` + prog + `" needs, is the file "` + lib + `", and its folder "` + filepath.Dir(lib) + `" is beneath no folder held`
+	rw := filepath.Join(dir, "rw")
+	b, err := Check(Folders{ReadWrite: []string{rw}, ReadOnly: []string{filepath.Dir(prog)}}, prog)
+	if !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || b != (Block{}) || !strings.Contains(err.Error(), says) {
+		t.Errorf("Check of a program naming a library outside the folders: Block %+v, %v; want the zero Block, ErrUsage, never ErrNoBlock, and %q", b, err, says)
+	}
+	if code, said := behindTheBlock(t, prog); code != childUsage || !strings.Contains(said, says) {
+		t.Errorf("RunHolding of a program naming a library outside the folders: exit %d, said %q; want exit %d and %q", code, said, childUsage, says)
+	}
+	if _, err := Check(Folders{ReadWrite: []string{rw}, ReadOnly: []string{filepath.Dir(prog), filepath.Dir(lib)}}, prog); errors.Is(err, ErrUsage) {
+		t.Errorf("Check with the library's folder held too: %v, want no ErrUsage", err)
+	}
+}
+
+// systemChild is the exit of the test binary as a program only one system's rows run; this system's
+// rows run none.
+func systemChild([]string) (int, bool) { return 0, false }
