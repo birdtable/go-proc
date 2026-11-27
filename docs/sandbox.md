@@ -24,6 +24,13 @@ bytes, its run path and the libraries it names, so they never count toward holdi
 bundled tool whose $ORIGIN run path, or a library it names by its full path, would put its own
 folder among them is refused unless the caller names that folder.
 
+On Linux, a library the program names by its full path, or finds by its run path, adds that
+library's real folder, and all beneath it, to what the program may read and run; a library whose
+folder is / or /usr itself is refused instead. So a program written into a read-write folder can
+read a folder the caller never named, if a shared library of the program's architecture lies
+there, and a caller may not say such a program reads only the folders it named. A later release
+refuses such a library: one outside both the caller's folders and the loader's own default folders.
+
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
 every exec but of a file beneath the folders and of /usr/bin/true, the dry run's program, which
