@@ -331,8 +331,8 @@ func noLoadf(prog, why string, args ...any) error {
 	return fmt.Errorf("the program %q cannot be given the folders it loads from: %s: %w", prog, fmt.Sprintf(why, args...), errUsage)
 }
 
-// loaded is a file of the search: the path the loader finds it by, whose folder is its $ORIGIN,
-// what was read of it, the file that first needed it, nil for the program, and how many files
+// loaded is a file of the search: the path the loader finds it by, as written and never cleaned,
+// whose folder by its text is its $ORIGIN, what was read of it, the file that first needed it, nil for the program, and how many files
 // lie between it and the program.
 type loaded struct {
 	object
@@ -438,7 +438,9 @@ func (s *search) run() ([]string, error) {
 }
 
 // find is the file the loader loads for name, which by needs, with its folder answered: nil for a
-// file loaded already under another name. A name with a slash is the file's own path.
+// file loaded already under another name. A name with a slash is the file's own path. The path is
+// joined as the loader joins it and resolved as written, never cleaned first, so a ".." after a
+// link leaves the link's target, as the kernel's open does, and not the link's name.
 func (s *search) find(by *loaded, name string) (*loaded, error) {
 	if by.depth >= maxLoadDepth {
 		return nil, noLoadf(s.prog, "the library %q is more than %d files from the program", name, maxLoadDepth)
@@ -454,7 +456,10 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 		return nil, noLoadf(s.prog, "%q needs the library %q, a path that is not absolute", by.name, name)
 	}
 	for _, dir := range dirs {
-		found := path.Join(dir, name)
+		found := name
+		if dir != "" {
+			found = strings.TrimRight(dir, "/") + "/" + name
+		}
 		resolved, err := s.files.resolve(found)
 		if err != nil {
 			continue
@@ -543,7 +548,8 @@ func (s *search) searched(by *loaded) ([]string, error) {
 }
 
 // expand is the folders of list, a DT_RPATH or DT_RUNPATH of o, with each $NAME or ${NAME} in it
-// replaced by what it stands for. A name the loader's rules do not hold, a folder that is not an
+// replaced by what it stands for, $ORIGIN by the text of o's path up to its last slash, as the
+// loader takes it, and each folder kept as written, never cleaned. A name the loader's rules do not hold, a folder that is not an
 // absolute path, the empty one among them, which a loader reads as the working folder, one with a
 // line end in it, where musl ends a folder, and a list over the bound are refused.
 func (s *search) expand(o *loaded, list []string) ([]string, error) {
@@ -566,7 +572,7 @@ func (s *search) expand(o *loaded, list []string) ([]string, error) {
 			}
 			value, ok := s.rules.tokens[name]
 			if name == "ORIGIN" {
-				value, ok = path.Dir(o.name), true
+				value, ok = o.name[:max(strings.LastIndex(o.name, "/"), 1)], true
 			}
 			if !ok {
 				return nil, noLoadf(s.prog, "the search list entry %q of %q holds a $ name netblock does not know", entry, o.name)
@@ -576,7 +582,7 @@ func (s *search) expand(o *loaded, list []string) ([]string, error) {
 		if !path.IsAbs(dir) || strings.Contains(dir, "\n") {
 			return nil, noLoadf(s.prog, "the search list entry %q of %q is not one absolute path", entry, o.name)
 		}
-		dirs = append(dirs, path.Clean(dir))
+		dirs = append(dirs, dir)
 	}
 	return dirs, nil
 }

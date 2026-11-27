@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -25,24 +26,49 @@ const (
 	gnuAMD   = "/usr/lib/x86_64-linux-gnu"
 )
 
-// fake is the files of a system that is not there: links, each path with a link in it and the real
-// path it resolves to, objects, the ELF file at each real path, and broken, the files that are no
-// ELF file and why.
+// fake is the files of a system that is not there: links, each link, a file's or a folder's, and
+// its target, objects, the ELF file at each real path, and broken, the files that are no ELF file
+// and why.
 type fake struct {
 	links   map[string]string
 	objects map[string]object
 	broken  map[string]string
 }
 
+// resolve follows name as the kernel does: one name at a time from the root, a link's target put
+// in its place, and ".." taken in the folder reached, so a ".." after a link leaves its target.
 func (f fake) resolve(name string) (string, error) {
-	if to, ok := f.links[name]; ok {
-		return to, nil
+	cur, rest := "/", strings.Split(name, "/")
+	for hops := 0; len(rest) > 0; {
+		part := rest[0]
+		rest = rest[1:]
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			cur = path.Dir(cur)
+			continue
+		}
+		cur = path.Join(cur, part)
+		to, ok := f.links[cur]
+		if !ok {
+			continue
+		}
+		if hops++; hops > 40 {
+			return "", errors.New("too many links")
+		}
+		if path.IsAbs(to) {
+			cur = "/"
+		} else {
+			cur = path.Dir(cur)
+		}
+		rest = append(strings.Split(to, "/"), rest...)
 	}
-	_, object := f.objects[name]
-	if _, broken := f.broken[name]; !object && !broken {
+	_, object := f.objects[cur]
+	if _, broken := f.broken[cur]; !object && !broken {
 		return "", fs.ErrNotExist
 	}
-	return name, nil
+	return cur, nil
 }
 
 func (f fake) object(name string) (object, error) {
@@ -334,6 +360,14 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 	held := []string{"/opt/app"}
 	glibc := func(o object) fake { return debian().file(tool, o) }
 	inHeld := "/opt/app/lib/liba.so"
+	// found is the path the loader finds a library in lib by, through the program's $ORIGIN/../lib,
+	// as it writes it.
+	found := func(lib string) string { return "/opt/app/bin/../lib/" + lib }
+	// behind is the program o, with a link /opt/app/l to /elsewhere/deep, a library in /elsewhere and
+	// one of the same name in /opt/app.
+	behind := func(o object) fake {
+		return glibc(o).link("/opt/app/l", "/elsewhere/deep").file("/elsewhere/liba.so", obj("")).file("/opt/app/liba.so", obj(""))
+	}
 	refused := []struct {
 		claim string
 		files fake
@@ -350,17 +384,17 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		{
 			"a library in a folder held, found by run path, that names one by its full path",
 			glibc(obj(glibcAMD, "liba.so").run("$ORIGIN/../lib")).file(inHeld, obj("", "/elsewhere/liby.so")).file("/elsewhere/liby.so", obj("")),
-			`the library "/elsewhere/liby.so", which "` + inHeld + `" needs, is the file "/elsewhere/liby.so", and its folder "/elsewhere" is beneath no folder held`,
+			`the library "/elsewhere/liby.so", which "` + found("liba.so") + `" needs, is the file "/elsewhere/liby.so", and its folder "/elsewhere" is beneath no folder held`,
 		},
 		{
 			"a library in a folder held whose own run path finds one outside",
 			glibc(obj(glibcAMD, "liba.so").run("$ORIGIN/../lib")).file(inHeld, obj("", "liby.so").run("/elsewhere")).file("/elsewhere/liby.so", obj("")),
-			`the library "/elsewhere/liby.so", which "` + inHeld + `" needs, is the file "/elsewhere/liby.so"`,
+			`the library "/elsewhere/liby.so", which "` + found("liba.so") + `" needs, is the file "/elsewhere/liby.so"`,
 		},
 		{
 			"a link in a folder held on a run path, to a library outside, by its real file",
 			glibc(obj(glibcAMD, "liby.so").run("$ORIGIN/../lib")).link("/opt/app/lib/liby.so", "/elsewhere/liby.so.1").file("/elsewhere/liby.so.1", obj("")),
-			`the library "/opt/app/lib/liby.so", which "` + tool + `" needs, is the file "/elsewhere/liby.so.1", and its folder "/elsewhere" is beneath no folder held`,
+			`the library "` + found("liby.so") + `", which "` + tool + `" needs, is the file "/elsewhere/liby.so.1", and its folder "/elsewhere" is beneath no folder held`,
 		},
 		{
 			// A soname is a name, never a real path: one that spells the link's real file does not
@@ -368,7 +402,7 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			"the same link, after a library whose soname is the real file it leads to",
 			glibc(obj(glibcAMD, "liba.so", "liby.so").run("$ORIGIN/../lib")).file(inHeld, obj("").so("/elsewhere/liby.so.1")).
 				link("/opt/app/lib/liby.so", "/elsewhere/liby.so.1").file("/elsewhere/liby.so.1", obj("")),
-			`the library "/opt/app/lib/liby.so", which "` + tool + `" needs, is the file "/elsewhere/liby.so.1", and its folder "/elsewhere" is beneath no folder held`,
+			`the library "` + found("liby.so") + `", which "` + tool + `" needs, is the file "/elsewhere/liby.so.1", and its folder "/elsewhere" is beneath no folder held`,
 		},
 		{
 			"a folder whose name only starts with the folder held", glibc(obj(glibcAMD, "/opt/application/libx.so")).file("/opt/application/libx.so", obj("")),
@@ -377,6 +411,20 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		{
 			"glibc: /usr/local/lib, which is musl's built-in folder and not glibc's", glibc(obj(glibcAMD, "libx.so").run("/usr/local/lib")).file("/usr/local/lib/libx.so", obj("")),
 			`its folder "/usr/local/lib" is beneath no folder held and no built-in folder of the loader`,
+		},
+		{
+			// The loader opens the path as written, and the kernel takes ".." from the link's target,
+			// /elsewhere, never from the link's name: the file in /opt/app is a decoy no loader opens.
+			"a library named by its full path through a link and \"..\"", behind(obj(glibcAMD, "/opt/app/l/../liba.so")),
+			`the library "/opt/app/l/../liba.so", which "` + tool + `" needs, is the file "/elsewhere/liba.so", and its folder "/elsewhere" is beneath no folder held`,
+		},
+		{
+			"a library found by a run path through a link and \"..\"", behind(obj(glibcAMD, "liba.so").run("/opt/app/l/..")),
+			`the library "/opt/app/l/../liba.so", which "` + tool + `" needs, is the file "/elsewhere/liba.so", and its folder "/elsewhere" is beneath no folder held`,
+		},
+		{
+			"a library found by an $ORIGIN run path through a link and \"..\"", behind(obj(glibcAMD, "liba.so").run("$ORIGIN/../l/..")),
+			`the library "/opt/app/bin/../l/../liba.so", which "` + tool + `" needs, is the file "/elsewhere/liba.so", and its folder "/elsewhere" is beneath no folder held`,
 		},
 	}
 	for _, r := range refused {
@@ -404,13 +452,29 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			glibc(obj(glibcAMD, "libx.so").rp("/elsewhere", "/opt/app/lib")).file("/elsewhere/libx.so", object{class: elf.ELFCLASS32, machine: elf.EM_386}).file("/opt/app/lib/libx.so", obj("")),
 			held, []string{gnuAMD, "/opt/app/lib"},
 		},
+		{
+			// The loader finds libb.so in the folder above liba.so's real folder, /srv/deep, never
+			// above the link's name, where there is none.
+			"a library through a linked folder whose run path is $ORIGIN/../x",
+			glibc(obj(glibcAMD, "liba.so").run("/opt/app/l")).link("/opt/app/l", "/srv/deep").
+				file("/srv/deep/liba.so", obj("", "libb.so").run("$ORIGIN/../x")).file("/srv/x/libb.so", obj("")),
+			[]string{"/opt/app", "/srv"}, []string{gnuAMD, "/srv/deep", "/srv/x"},
+		},
+		{
+			// liba.so's $ORIGIN is the text of the path it was found by, /opt/app/l/../lib, which
+			// the kernel reads as /srv/lib: libb.so is there, and none is in /opt/app/lib.
+			"a library found through a link and \"..\" whose run path is $ORIGIN",
+			glibc(obj(glibcAMD, "liba.so").run("/opt/app/l/../lib")).link("/opt/app/l", "/srv/deep").
+				file("/srv/lib/liba.so", obj("", "libb.so").run("$ORIGIN")).file("/srv/lib/libb.so", obj("")),
+			[]string{"/opt/app", "/srv"}, []string{gnuAMD, "/srv/lib"},
+		},
 	}
 	for _, r := range runs {
 		if got, err := loadFolders(r.files, "amd64", tool, r.held); err != nil || !slices.Equal(got, r.want) {
 			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
 		}
 	}
-	if len(refused) < 8 || len(runs) < 6 {
+	if len(refused) < 11 || len(runs) < 8 {
 		t.Fatalf("ran %d refused rows and %d that run", len(refused), len(runs))
 	}
 }

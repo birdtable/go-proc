@@ -113,7 +113,10 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 // folder held, which names this system's loader and a library in another folder by its full path,
 // is ErrUsage from Check, naming the library and its folder, with the zero Block, and RunHolding,
 // in a process of its own, refuses it the same way. With the library's folder held too, Check does
-// not refuse it with ErrUsage: the folders the caller names are what the search is given.
+// not refuse it with ErrUsage: the folders the caller names are what the search is given. A
+// library named through a link in the folder held and "..", by its full path or by a run path, is
+// judged by the file the kernel opens, the link's target's, and refused the same way, though a
+// library of that name is in the folder held.
 //
 // What it costs when this fails: a program written into a read-write folder names a library in a
 // folder the caller never named, and RunHolding grants the program that folder.
@@ -146,6 +149,39 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 	}
 	if _, err := Check(Folders{ReadWrite: []string{rw}, ReadOnly: []string{filepath.Dir(prog), filepath.Dir(lib)}}, prog); errors.Is(err, ErrUsage) {
 		t.Errorf("Check with the library's folder held too: %v, want no ErrUsage", err)
+	}
+	// The loader opens a path as written, and the kernel takes ".." from a link's target: through
+	// bin/l, a link to elsewhere/deep, bin/l/../libx.so is elsewhere/libx.so, never the libx.so in
+	// bin, a decoy in the folder held.
+	if err := os.MkdirAll(filepath.Join(dir, "elsewhere", "deep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "elsewhere", "deep"), filepath.Join(dir, "bin", "l")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "libx.so"), elfSpec{dynamic: []dynEntry{}}.bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	through := filepath.Join(dir, "bin", "l") + "/.."
+	for _, r := range []struct {
+		name    string
+		dynamic []dynEntry
+	}{
+		{"by-full-path", []dynEntry{{elf.DT_NEEDED, through + "/libx.so"}}},
+		{"by-run-path", []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, through}}},
+	} {
+		prog := filepath.Join(dir, "bin", r.name)
+		if err := os.WriteFile(prog, elfSpec{interp: []byte(host.interp + "\x00"), dynamic: r.dynamic, exec: true}.bytes(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		says := `the library "` + through + `/libx.so", which "` + prog + `" needs, is the file "` + lib + `", and its folder "` + filepath.Dir(lib) + `" is beneath no folder held`
+		b, err := Check(Folders{ReadWrite: []string{rw}, ReadOnly: []string{filepath.Dir(prog)}}, prog)
+		if !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) || b != (Block{}) || !strings.Contains(err.Error(), says) {
+			t.Errorf("Check of a program naming a library %s through a link and \"..\": Block %+v, %v; want the zero Block, ErrUsage, never ErrNoBlock, and %q", r.name, b, err, says)
+		}
+		if code, said := behindTheBlock(t, prog); code != childUsage || !strings.Contains(said, says) {
+			t.Errorf("RunHolding of a program naming a library %s through a link and \"..\": exit %d, said %q; want exit %d and %q", r.name, code, said, childUsage, says)
+		}
 	}
 }
 
