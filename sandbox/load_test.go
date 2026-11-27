@@ -371,7 +371,9 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // loader stops, a link loop or a path past its length limit, ahead of one in the folder held; a
 // program or a library that names one by DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY, on glibc
 // or musl; and, on glibc, a library looked for in a folder whose glibc-hwcaps subfolder is beneath
-// no built-in folder by its real path, in the folder held or through a link out of a built-in folder.
+// no built-in folder by its real path, in the folder held or through a link out of a built-in folder,
+// or is a link loop, or is reached by short links at a real path past the length limit, which cannot
+// be told.
 // A program whose libraries are all beneath the folder held or a built-in folder of its loader
 // runs: by $ORIGIN, by a run path into a second folder held, by a run path beneath a built-in
 // folder, musl's /usr/local/lib, and with a file of another architecture outside them, which glibc
@@ -544,6 +546,17 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			"glibc: a built-in folder whose glibc-hwcaps subfolder is a link out of it", glibc(obj(glibcAMD, "libc.so.6")).link("/lib/x86_64-linux-gnu/glibc-hwcaps", "/opt/app/hw").dir("/opt/app/hw"),
 			`where glibc first looks in "/lib/x86_64-linux-gnu/glibc-hwcaps" by the machine's levels, which the search does not follow, and its real path "/opt/app/hw" is beneath no built-in folder of the loader`,
 		},
+		{
+			"glibc: a folder held whose glibc-hwcaps subfolder is a link loop",
+			glibc(obj(glibcAMD, "liba.so").run("/opt/app/lib")).link("/opt/app/lib/glibc-hwcaps", "/opt/app/lib/glibc-hwcaps").file(inHeld, obj("")),
+			`where glibc first looks in "/opt/app/lib/glibc-hwcaps" by the machine's levels, which the search does not follow, and too many levels of symbolic links`,
+		},
+		{
+			"glibc: a folder held whose glibc-hwcaps subfolder is reached by short links at a real path past the length limit",
+			glibc(obj(glibcAMD, "liba.so").run("/opt/app/lib")).link("/opt/app/lib/glibc-hwcaps", "/far"+deep("a")+"/bb").
+				link("/far"+deep("a")+"/bb", deep("b")[1:]).dir("/far"+deep("a")+deep("b")).file(inHeld, obj("")),
+			`where glibc first looks in "/opt/app/lib/glibc-hwcaps" by the machine's levels, which the search does not follow, and ` + errUntold.Error(),
+		},
 	}
 	for _, r := range refused {
 		got, err := loadFolders(r.files, "amd64", tool, held)
@@ -599,7 +612,7 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
 		}
 	}
-	if len(refused) < 22 || len(runs) < 12 {
+	if len(refused) < 24 || len(runs) < 12 {
 		t.Fatalf("ran %d refused rows and %d that run", len(refused), len(runs))
 	}
 }
