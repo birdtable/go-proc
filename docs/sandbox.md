@@ -25,20 +25,32 @@ bytes, its run path and the libraries it names, so they never count toward holdi
 bundled tool whose $ORIGIN run path, or a library it names by its full path, would put its own
 folder among them is refused unless the caller names that folder.
 
-On Linux, a library the program names by its full path, or finds by its run path, is judged by its
-real file, so a link to one is judged by where it leads. One whose real folder is beneath neither a
-folder the caller named nor a built-in folder of the loader (glibc's, by the loader's real folder: in
-its architecture's lib folder, /lib/<multiarch>, /usr/lib/<multiarch>, /lib and /usr/lib; in lib64,
-/lib64 and /usr/lib64; in lib, /lib and /usr/lib; musl's /lib, /usr/local/lib and /usr/lib) is
-refused with ErrUsage, before anything is set, naming the file and its folder; one whose folder is
-/ or /usr itself is refused too.
-Each library the search loads is judged so, by its own needs and run path, not the program's alone,
-so a library in a read-write folder that names /elsewhere/liby.so is refused as the program would be.
-A caller that means such a library names its folder, or one above it. To the search a shared library
-is any ET_DYN file without DF_1_PIE, so any such file on a run path counts as one. The real folder of
-a library beneath a built-in folder, a private folder in /usr/lib/<multiarch> among them, is still
-added, and all beneath it, so the claim above stays bounded by the folders the loader and libraries
-load from.
+On Linux, the block is what enforces the folders: a program behind RunHolding reads and runs only
+beneath the caller's folders, its loader's folder, and the real folders of the libraries the load
+search vouched for, each beneath a folder the caller named or a built-in folder of the loader
+(glibc's, by the loader's real folder: in its architecture's lib folder, /lib/<multiarch>,
+/usr/lib/<multiarch>, /lib and /usr/lib; in lib64, /lib64 and /usr/lib64; in lib, /lib and
+/usr/lib; musl's /lib, /usr/local/lib and /usr/lib). A library anywhere else fails at load, with
+nothing granted for it. The real folder of a library beneath a built-in folder, a private folder in
+/usr/lib/<multiarch> among them, is added, and all beneath it, so the claim above stays bounded by
+the folders the loader and libraries load from. A library whose folder is / or /usr itself is
+refused.
+
+Apart from that, RunHolding and Check with folders refuse up front, with ErrUsage before anything
+is set and naming the file and its folder, a library outside the caller's folders and the loader's
+built-in folders, as the search finds it. That covers each library the program needs, and each one a
+library it loads needs, by its own needs and run path, named by its full path or found by its
+DT_RPATH or DT_RUNPATH, and judged by its real file, so a link to one is judged by where it leads:
+a library in a read-write folder that names /elsewhere/liby.so is refused as the program would be.
+A caller that means such a library names its folder, or one above it. To the search a shared
+library is any ET_DYN file without DF_1_PIE, so any such file on a run path counts as one.
+
+The search imitates two loaders' search orders, so it refuses up front what it finds, not every
+way a loader can reach a file. A library the loader reaches some other way is not refused up
+front: one named by an audit or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY), one
+in a glibc-hwcaps subfolder, and one found where a loader's search order differs from the
+search's. Behind the block such a library loads only from the folders above, and from anywhere
+else fails at load, with nothing granted for it.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
