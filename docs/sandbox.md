@@ -28,9 +28,8 @@ On Linux, a library the program names by its full path, or finds by its run path
 library's real folder, and all beneath it, to what the program may read and run; a library whose
 folder is / or /usr itself is refused instead. So a program written into a read-write folder can
 read a folder the caller never named, if a shared library of the program's architecture lies
-there, and a caller may not say such a program reads only the folders it named.
-go-proc-private#457 is the fix to come: it refuses a library outside both the caller's folders and
-the loader's own default folders.
+there, and a caller may not say such a program reads only the folders it named. A later release
+refuses such a library: one outside both the caller's folders and the loader's own default folders.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
