@@ -12,10 +12,11 @@ folders it may use. Use it to run a tool you do not fully trust, such as a build
 letting it reach the network. On Linux, the block lets the program load a library only from the
 folders you named, its loader's folder and the folders of the libraries the load search vouched
 for; a library anywhere else fails at load, with nothing granted. Up front, a library the search
-finds, by its full path or by its run path, whose real folder is beneath neither a folder you named
-nor a built-in folder of its loader, is refused before anything is set: name that folder if you
-mean it. A library the loader reaches another way is not refused up front, and fails at load
-instead. [docs/sandbox.md](../docs/sandbox.md) says how each library is judged, and which ways
+finds, by its full path, by a run path, or through a link in a built-in folder, whose real folder is
+beneath neither a folder you named nor a built-in folder of its loader, is refused before anything
+is set: name that folder if you mean it. A library the loader reaches another way is not promised
+refused up front: it loads only from the folders the block grants, and from anywhere else fails at
+load. [docs/sandbox.md](../docs/sandbox.md) says how each library is judged, and which ways
 those are.
 
 ```
@@ -85,7 +86,7 @@ Know these before you rely on it.
   Name their folders yourself.
 - **The up-front refusal covers what the load search finds**, not every way a loader can reach a
   library: one named by an audit or filter tag, one in a `glibc-hwcaps` subfolder, and one found
-  where a loader's search order differs from the search's are not refused before the run. Behind
+  where a loader's search order differs from the search's are not promised refused before the run. Behind
   the block such a library loads only from the folders the block grants, and from anywhere else
   fails at load.
 
