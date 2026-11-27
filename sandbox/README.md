@@ -9,10 +9,14 @@ Linux, and the system sandbox, `sandbox-exec`, on macOS. It adds one block, the 
 files held to a few folders, set whole or refused where the system gives nothing. It never runs a
 program with a weaker block than you asked for. You name the program, and for `RunHolding` the
 folders it may use. Use it to run a tool you do not fully trust, such as a build or a test, without
-letting it reach the network. On Linux, a library it names by its full path, or finds by its run
-path, whose real folder is beneath neither a folder you named nor a built-in folder of its loader,
-is refused before anything is set: name that folder if you mean it.
-[docs/sandbox.md](../docs/sandbox.md) says how each library is judged.
+letting it reach the network. On Linux, the block lets the program load a library only from the
+folders you named, its loader's folder and the folders of the libraries the load search vouched
+for; a library anywhere else fails at load, with nothing granted. Up front, a library the search
+finds, by its full path or by its run path, whose real folder is beneath neither a folder you named
+nor a built-in folder of its loader, is refused before anything is set: name that folder if you
+mean it. A library the loader reaches another way is not refused up front, and fails at load
+instead. [docs/sandbox.md](../docs/sandbox.md) says how each library is judged, and which ways
+those are.
 
 ```
 go get github.com/birdtable/go-proc/sandbox
@@ -79,6 +83,11 @@ Know these before you rely on it.
   standard stream among them, is used as before.
 - **Libraries found only by `LD_LIBRARY_PATH`, `/etc/ld.so.cache` or `dlopen`** are not found.
   Name their folders yourself.
+- **The up-front refusal covers what the load search finds**, not every way a loader can reach a
+  library: one named by an audit or filter tag, one in a `glibc-hwcaps` subfolder, and one found
+  where a loader's search order differs from the search's are not refused before the run. Behind
+  the block such a library loads only from the folders the block grants, and from anywhere else
+  fails at load.
 
 Say what you can prove: on Linux, the program runs with the network closed and its files held to
 the folders you named and the folders its loader and libraries load from. On macOS, it runs under

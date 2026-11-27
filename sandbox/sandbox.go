@@ -229,8 +229,8 @@ type Folders struct {
 // matches ErrNoBlock, as Run's.
 //
 // To the folders it adds, read-only, those the program needs to load, which no caller names. On
-// Linux they are the folder of its loader and of each library it needs, by their real paths, as
-// its loader finds them behind the block: with no /etc/ld.so.cache, and with no LD_LIBRARY_PATH,
+// Linux they are the folder of its loader and of each library it needs, by their real paths, as a
+// search after its loader's finds them: with no /etc/ld.so.cache, and with no LD_LIBRARY_PATH,
 // LD_PRELOAD or LD_AUDIT, which behind the block reach only folders the caller granted itself. A
 // program that names no loader, as a Go program built without cgo, adds none. Each file is read as
 // the kernel and its loader read it, by its program headers. On Linux a #! script, whose
@@ -239,7 +239,7 @@ type Folders struct {
 // for one that is a program, a search list it cannot follow, a loader or a library whose real
 // folder is the root or /usr itself, which no load grants, and a library whose real folder is
 // beneath neither a folder the caller named nor a built-in folder of its loader, which no caller
-// judged, are ErrUsage, naming the file. On macOS
+// judged, each as that search finds it, are ErrUsage, naming the file. On macOS
 // nothing is read and none is added: the system's libraries need no folder, and a #! script is not
 // refused, but held to the program that runs it, as Folders says.
 func RunHolding(f Folders, path string, args, environ []string) error {
