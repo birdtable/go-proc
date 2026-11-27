@@ -23,7 +23,10 @@ import (
 // section header. A file found for a library is one only where it is a shared object and no
 // program; any other is refused, as glibc refuses it. A library whose real folder is the root or
 // /usr itself is refused: either grant is the whole tree, or its system half, for bytes no caller
-// judged, and no loader the search knows loads from there.
+// judged, and no loader the search knows loads from there. So is a library whose real folder is
+// beneath neither a folder the caller named nor a built-in folder of the loader: a program, or a
+// library it loads, that names a library by its full path or finds one by a run path, a link to
+// one among them, would widen the read to a folder the caller never named.
 //
 // glibc looks in the DT_RPATH of the file that needs the library, then of the file that needed that
 // one, and so on up to the program, only when the file that needs it has no DT_RUNPATH, and never
@@ -338,12 +341,13 @@ type loaded struct {
 	depth int
 }
 
-// search is one program's search: the files it reads, the program as the caller named it, its
-// loader's rules, the program itself, each name and real path a file is loaded by already, and the
-// folders answered so far.
+// search is one program's search: the files it reads, the program as the caller named it, the
+// caller's folders, by their real paths, its loader's rules, the program itself, each name and real
+// path a file is loaded by already, and the folders answered so far.
 type search struct {
 	files loadFiles
 	prog  string
+	held  []string
 	rules loaderRules
 	main  *loaded
 	known map[string]bool
@@ -355,9 +359,11 @@ type search struct {
 // loader, as a Go program built without cgo, and none for a machine the block holds no filter
 // for, which the block refuses itself. A file that is no ELF file, a #! script, a loader the
 // search does not know, a list with a $NAME it does not know or a folder that is not an absolute
-// path, a library that is not found and a search over its bounds are ErrUsage, naming the file.
-// The first folder is the loader's own; the rest come from the program's bytes and its libraries'.
-func loadFolders(files loadFiles, arch, prog string) ([]string, error) {
+// path, a library that is not found, a library beneath neither a folder of held, the caller's
+// folders by their real paths, nor a built-in folder of the loader, and a search over its bounds
+// are ErrUsage, naming the file. The first folder is the loader's own; the rest come from the
+// program's bytes and its libraries'.
+func loadFolders(files loadFiles, arch, prog string, held []string) ([]string, error) {
 	if _, ok := loadersOf(arch); !ok {
 		return nil, nil
 	}
@@ -365,13 +371,13 @@ func loadFolders(files loadFiles, arch, prog string) ([]string, error) {
 	if err != nil {
 		return nil, noLoadf(prog, "it cannot be found: %v", err)
 	}
-	return loadFoldersOf(files, arch, prog, resolved)
+	return loadFoldersOf(files, arch, prog, resolved, held)
 }
 
 // loadFoldersOf is loadFolders for the program prog whose real file is resolved, as RunHolding's
 // walk of its path found it, so the folders held and the folders it loads from are told of one
 // file, never of two reads of the path.
-func loadFoldersOf(files loadFiles, arch, prog, resolved string) ([]string, error) {
+func loadFoldersOf(files loadFiles, arch, prog, resolved string, held []string) ([]string, error) {
 	names, ok := loadersOf(arch)
 	if !ok {
 		return nil, nil
@@ -397,7 +403,7 @@ func loadFoldersOf(files loadFiles, arch, prog, resolved string) ([]string, erro
 	if !ok {
 		return nil, noLoadf(prog, "its loader %q, the file %q, is one netblock does not know", o.interp, loader)
 	}
-	s := &search{files: files, prog: prog, rules: rules, main: &loaded{object: o, name: resolved},
+	s := &search{files: files, prog: prog, held: held, rules: rules, main: &loaded{object: o, name: resolved},
 		known: map[string]bool{path.Base(o.interp): true, loader: true}, dirs: []string{path.Dir(loader)}}
 	return s.run()
 }
@@ -474,8 +480,9 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 
 // read is the file found, at its real path: nil for one of another architecture, which glibc
 // passes over and musl refuses. One of the program's architecture is refused when it is no
-// library, a program or a file of another type, and when its real folder is the root or /usr
-// itself, which no load grants.
+// library, a program or a file of another type, when its real folder is the root or /usr itself,
+// which no load grants, and when its real folder is beneath neither a folder the caller named nor
+// a built-in folder of the loader, which no caller judged.
 func (s *search) read(by *loaded, found, resolved string) (*object, error) {
 	o, err := s.files.object(resolved)
 	if err = errors.Join(err, o.unread); err != nil {
@@ -488,12 +495,21 @@ func (s *search) read(by *loaded, found, resolved string) (*object, error) {
 		if folder := path.Dir(resolved); tooWide(folder) {
 			return nil, noLoadf(s.prog, "the library %q, which %q needs, is the file %q, and its folder %q is too wide to grant", found, by.name, resolved, folder)
 		}
+		if folder := path.Dir(resolved); !s.vouched(folder) {
+			return nil, noLoadf(s.prog, "the library %q, which %q needs, is the file %q, and its folder %q is beneath no folder held and no built-in folder of the loader: name it, or a folder above it, in Folders", found, by.name, resolved, folder)
+		}
 		return &o, nil
 	}
 	if s.rules.musl {
 		return nil, noLoadf(s.prog, "the library %q, which %q needs, is of another architecture", found, by.name)
 	}
 	return nil, nil
+}
+
+// vouched says whether folder, a library's real folder, is beneath a folder the caller named or a
+// built-in folder of the loader: one a caller judged, or the system's own.
+func (s *search) vouched(folder string) bool {
+	return slices.ContainsFunc(slices.Concat(s.held, s.rules.defaults), func(d string) bool { return beneathSlash(folder, d) })
 }
 
 // searched is the folders the loader looks in for a library by needs, in its order.

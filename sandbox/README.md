@@ -10,9 +10,9 @@ files held to a few folders, set whole or refused where the system gives nothing
 program with a weaker block than you asked for. You name the program, and for `RunHolding` the
 folders it may use. Use it to run a tool you do not fully trust, such as a build or a test, without
 letting it reach the network. On Linux, a library it names by its full path, or finds by its run
-path, adds that library's real folder, and all beneath it, to what it may read and run, so a
-program, or a library it loads, written into a read-write folder can read a folder you never named
-if a shared library of its architecture lies there. [docs/sandbox.md](../docs/sandbox.md) says what a later release does about it.
+path, whose real folder is beneath neither a folder you named nor a built-in folder of its loader,
+is refused before anything is set: name that folder if you mean it.
+[docs/sandbox.md](../docs/sandbox.md) says how each library is judged.
 
 ```
 go get github.com/birdtable/go-proc/sandbox

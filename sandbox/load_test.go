@@ -223,7 +223,7 @@ func TestTheLoadFoldersAreTheLoadersOwnSearch(t *testing.T) {
 		},
 	}
 	for _, r := range rows {
-		got, err := loadFolders(r.files, r.arch, r.prog)
+		got, err := loadFolders(r.files, r.arch, r.prog, []string{"/opt"})
 		if err != nil || !slices.Equal(got, r.want) {
 			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
 		}
@@ -296,7 +296,7 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 	}
 	for _, r := range rows {
 		arch := "amd64"
-		got, err := loadFolders(r.files, arch, tool)
+		got, err := loadFolders(r.files, arch, tool, []string{"/opt"})
 		if got != nil {
 			t.Errorf("%s: the folders %q with the refusal, want none", r.claim, got)
 		}
@@ -309,6 +309,101 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 	}
 	if len(rows) < 28 {
 		t.Fatalf("ran %d rows", len(rows))
+	}
+}
+
+// TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused: with the caller holding
+// /opt/app, the program's own folder among it, a library whose real folder is beneath neither that
+// folder nor a built-in folder of the loader is ErrUsage, naming the program, the library, the file
+// that needs it, its real file and its folder, with no folder answered: one the program names by
+// its full path; one found by the program's run path; one found by a library's run path, in a
+// folder held, that names it by its full path, and one found by that library's own run path; one
+// found through a link in a folder held, by its real file; one in a folder whose name only starts
+// with the folder held; and one in /usr/local/lib, a built-in folder of musl's but not of glibc's.
+// A program whose libraries are all beneath the folder held or a built-in folder of its loader
+// runs: by $ORIGIN, by a run path into a second folder held, by a run path beneath a built-in
+// folder, musl's /usr/local/lib, and with a file of another architecture outside them, which glibc
+// passes over, so it is never loaded.
+//
+// What it costs when this fails: a program written into a read-write folder names a library in a
+// folder the caller never named, and RunHolding grants the program the read and the run of all of
+// that folder.
+func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *testing.T) {
+	t.Parallel()
+	const tool = "/opt/app/bin/tool"
+	held := []string{"/opt/app"}
+	glibc := func(o object) fake { return debian().file(tool, o) }
+	inHeld := "/opt/app/lib/liba.so"
+	refused := []struct {
+		claim string
+		files fake
+		says  string
+	}{
+		{
+			"a library the program names by its full path", glibc(obj(glibcAMD, "/elsewhere/libx.so")).file("/elsewhere/libx.so", obj("")),
+			`the library "/elsewhere/libx.so", which "` + tool + `" needs, is the file "/elsewhere/libx.so", and its folder "/elsewhere" is beneath no folder held`,
+		},
+		{
+			"a library the program finds by its run path", glibc(obj(glibcAMD, "libx.so").run("/elsewhere")).file("/elsewhere/libx.so", obj("")),
+			`the library "/elsewhere/libx.so", which "` + tool + `" needs, is the file "/elsewhere/libx.so", and its folder "/elsewhere" is beneath no folder held`,
+		},
+		{
+			"a library in a folder held, found by run path, that names one by its full path",
+			glibc(obj(glibcAMD, "liba.so").run("$ORIGIN/../lib")).file(inHeld, obj("", "/elsewhere/liby.so")).file("/elsewhere/liby.so", obj("")),
+			`the library "/elsewhere/liby.so", which "` + inHeld + `" needs, is the file "/elsewhere/liby.so", and its folder "/elsewhere" is beneath no folder held`,
+		},
+		{
+			"a library in a folder held whose own run path finds one outside",
+			glibc(obj(glibcAMD, "liba.so").run("$ORIGIN/../lib")).file(inHeld, obj("", "liby.so").run("/elsewhere")).file("/elsewhere/liby.so", obj("")),
+			`the library "/elsewhere/liby.so", which "` + inHeld + `" needs, is the file "/elsewhere/liby.so"`,
+		},
+		{
+			"a link in a folder held on a run path, to a library outside, by its real file",
+			glibc(obj(glibcAMD, "liby.so").run("$ORIGIN/../lib")).link("/opt/app/lib/liby.so", "/elsewhere/liby.so.1").file("/elsewhere/liby.so.1", obj("")),
+			`the library "/opt/app/lib/liby.so", which "` + tool + `" needs, is the file "/elsewhere/liby.so.1", and its folder "/elsewhere" is beneath no folder held`,
+		},
+		{
+			"a folder whose name only starts with the folder held", glibc(obj(glibcAMD, "/opt/application/libx.so")).file("/opt/application/libx.so", obj("")),
+			`its folder "/opt/application" is beneath no folder held`,
+		},
+		{
+			"glibc: /usr/local/lib, which is musl's built-in folder and not glibc's", glibc(obj(glibcAMD, "libx.so").run("/usr/local/lib")).file("/usr/local/lib/libx.so", obj("")),
+			`its folder "/usr/local/lib" is beneath no folder held and no built-in folder of the loader`,
+		},
+	}
+	for _, r := range refused {
+		got, err := loadFolders(r.files, "amd64", tool, held)
+		if got != nil || !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) {
+			t.Errorf("%s: the folders %q, %v; want none, ErrUsage and never ErrNoBlock", r.claim, got, err)
+		}
+		if says := fmt.Sprint(err); !strings.Contains(says, `the program "`+tool+`"`) || !strings.Contains(says, r.says) {
+			t.Errorf("%s: %v, want the program named and %q", r.claim, err, r.says)
+		}
+	}
+	runs := []struct {
+		claim string
+		files fake
+		held  []string
+		want  []string
+	}{
+		{"libraries all in the loader's built-in folders", glibc(obj(glibcAMD, "libc.so.6")), held, []string{gnuAMD}},
+		{"a library beside the program by $ORIGIN", glibc(obj(glibcAMD, "liba.so").run("$ORIGIN/../lib")).file(inHeld, obj("")), held, []string{gnuAMD, "/opt/app/lib"}},
+		{"a run path into a second folder held", glibc(obj(glibcAMD, "libx.so").run("/srv/libs")).file("/srv/libs/libx.so", obj("")), append([]string{"/srv"}, held...), []string{gnuAMD, "/srv/libs"}},
+		{"a run path beneath a built-in folder", glibc(obj(glibcAMD, "libp.so").run(gnuAMD+"/pkg")).file(gnuAMD+"/pkg/libp.so", obj("")), held, []string{gnuAMD, gnuAMD + "/pkg"}},
+		{"musl: /usr/local/lib, its built-in folder", alpine().file(tool, obj(muslAMD, "libx.so")).file("/usr/local/lib/libx.so", obj("")), held, []string{"/lib", "/usr/local/lib"}},
+		{
+			"a file of another architecture outside them, which glibc passes over",
+			glibc(obj(glibcAMD, "libx.so").rp("/elsewhere", "/opt/app/lib")).file("/elsewhere/libx.so", object{class: elf.ELFCLASS32, machine: elf.EM_386}).file("/opt/app/lib/libx.so", obj("")),
+			held, []string{gnuAMD, "/opt/app/lib"},
+		},
+	}
+	for _, r := range runs {
+		if got, err := loadFolders(r.files, "amd64", tool, r.held); err != nil || !slices.Equal(got, r.want) {
+			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
+		}
+	}
+	if len(refused) < 7 || len(runs) < 6 {
+		t.Fatalf("ran %d refused rows and %d that run", len(refused), len(runs))
 	}
 }
 

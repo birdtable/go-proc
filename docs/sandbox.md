@@ -25,12 +25,18 @@ bytes, its run path and the libraries it names, so they never count toward holdi
 bundled tool whose $ORIGIN run path, or a library it names by its full path, would put its own
 folder among them is refused unless the caller names that folder.
 
-On Linux, a library the program names by its full path, or finds by its run path, adds that
-library's real folder, and all beneath it, to what the program may read and run; a library whose
-folder is / or /usr itself is refused instead. So a program, or a library it loads, written into a
-read-write folder can read a folder the caller never named, if a shared library of the program's
-architecture lies there, and a caller may not say such a program reads only the folders it named. A later release
-refuses such a library: one outside both the caller's folders and the loader's own default folders.
+On Linux, a library the program names by its full path, or finds by its run path, is judged by its
+real file, so a link to one is judged by where it leads. One whose real folder is beneath neither a
+folder the caller named nor a built-in folder of the loader (glibc's /lib, /usr/lib and their
+architecture's lib folders; musl's /lib, /usr/local/lib and /usr/lib) is refused with ErrUsage, before
+anything is set, naming the file and its folder; one whose folder is / or /usr itself is refused too.
+Each library the search loads is judged so, by its own needs and run path, not the program's alone,
+so a library in a read-write folder that names /elsewhere/liby.so is refused as the program would be.
+A caller that means such a library names its folder, or one above it. To the search a shared library
+is any ET_DYN file without DF_1_PIE, so any such file on a run path counts as one. The real folder of
+a library beneath a built-in folder, a private folder in /usr/lib/<multiarch> among them, is still
+added, and all beneath it, so the claim above stays bounded by the folders the loader and libraries
+load from.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies

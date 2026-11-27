@@ -44,6 +44,9 @@ func LoadChild(args []string) (int, bool) {
 	if len(args) >= 3 && args[1] == starter {
 		return startedByStarter(args[2:]), true
 	}
+	if code, ok := systemChild(args[1:]); ok {
+		return code, true
+	}
 	if len(args) < 4 || args[1] != argvChild && (len(args) > 5 || args[1] != loadChild) {
 		return 0, false
 	}
@@ -63,7 +66,7 @@ func LoadChild(args []string) (int, bool) {
 			if err != nil {
 				return err
 			}
-			dirs, err := loadHere(prog, prog)
+			dirs, err := loadHere(prog, prog, slices.Concat(n.readWrite, n.readOnly))
 			if err != nil {
 				return err
 			}

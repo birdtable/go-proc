@@ -5,7 +5,8 @@
 //
 // Each folder is named by its absolute path. With none, every file is open
 // to the program, as sandbox.Run leaves them; with any, every file outside
-// them is denied, reads included, as sandbox.RunHolding holds them.
+// them, and outside the folders the program's loader and libraries load from,
+// is denied, reads included, as sandbox.RunHolding holds them.
 //
 // It sets the block on itself and execs the program, so the program's exit is
 // its own. When the program is not run it says why on stderr and exits 2 for
