@@ -345,11 +345,14 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // its full path; one found by the program's run path; one found by a library's run path, in a
 // folder held, that names it by its full path, and one found by that library's own run path; one
 // found through a link in a folder held, by its real file; one in a folder whose name only starts
-// with the folder held; and one in /usr/local/lib, a built-in folder of musl's but not of glibc's.
+// with the folder held; one in /usr/local/lib, a built-in folder of musl's but not of glibc's; and
+// musl's, found in the next folder of a run path whose first, in the folder held, makes a path of
+// muslPath bytes with the name, which musl never opens.
 // A program whose libraries are all beneath the folder held or a built-in folder of its loader
 // runs: by $ORIGIN, by a run path into a second folder held, by a run path beneath a built-in
 // folder, musl's /usr/local/lib, and with a file of another architecture outside them, which glibc
-// passes over, so it is never loaded.
+// passes over, so it is never loaded; and musl's from that first folder when its path is a byte
+// shorter.
 //
 // What it costs when this fails: a program written into a read-write folder names a library in a
 // folder the caller never named, and RunHolding grants the program the read and the run of all of
@@ -360,6 +363,20 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 	held := []string{"/opt/app"}
 	glibc := func(o object) fake { return debian().file(tool, o) }
 	inHeld := "/opt/app/lib/liba.so"
+	// muslDir is a folder beneath /opt/app, by names of 100 bytes or fewer, whose path with a slash
+	// and libx.so is short bytes fewer than muslPath.
+	muslDir := func(short int) string {
+		dir := "/opt/app"
+		for n := muslPath - short - len("/libx.so"); len(dir) < n; {
+			dir += "/" + strings.Repeat("d", min(100, n-len(dir)-1))
+		}
+		return dir
+	}
+	// beyondMusl is musl's program finding libx.so by a run path whose first folder is muslDir(short),
+	// in the folder held, and whose second is /elsewhere, each with a libx.so.
+	beyondMusl := func(short int) fake {
+		return alpine().file(tool, obj(muslAMD, "libx.so").run(muslDir(short), "/elsewhere")).file(muslDir(short)+"/libx.so", obj("")).file("/elsewhere/libx.so", obj(""))
+	}
 	// found is the path the loader finds a library in lib by, through the program's $ORIGIN/../lib,
 	// as it writes it.
 	found := func(lib string) string { return "/opt/app/bin/../lib/" + lib }
@@ -426,6 +443,11 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			"a library found by an $ORIGIN run path through a link and \"..\"", behind(obj(glibcAMD, "liba.so").run("$ORIGIN/../l/..")),
 			`the library "/opt/app/bin/../l/../liba.so", which "` + tool + `" needs, is the file "/elsewhere/liba.so", and its folder "/elsewhere" is beneath no folder held`,
 		},
+		{
+			// musl never opens a path that fills its buffer, and takes the file in the next folder.
+			"musl: a run path folder in the folder held whose path with the name is muslPath bytes", beyondMusl(0),
+			`the library "/elsewhere/libx.so", which "` + tool + `" needs, is the file "/elsewhere/libx.so", and its folder "/elsewhere" is beneath no folder held`,
+		},
 	}
 	for _, r := range refused {
 		got, err := loadFolders(r.files, "amd64", tool, held)
@@ -468,13 +490,14 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 				file("/srv/lib/liba.so", obj("", "libb.so").run("$ORIGIN")).file("/srv/lib/libb.so", obj("")),
 			[]string{"/opt/app", "/srv"}, []string{gnuAMD, "/srv/lib"},
 		},
+		{"musl: a run path folder whose path with the name is a byte under muslPath", beyondMusl(1), held, []string{"/lib", muslDir(1)}},
 	}
 	for _, r := range runs {
 		if got, err := loadFolders(r.files, "amd64", tool, r.held); err != nil || !slices.Equal(got, r.want) {
 			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
 		}
 	}
-	if len(refused) < 11 || len(runs) < 8 {
+	if len(refused) < 12 || len(runs) < 9 {
 		t.Fatalf("ran %d refused rows and %d that run", len(refused), len(runs))
 	}
 }

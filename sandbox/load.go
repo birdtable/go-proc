@@ -35,8 +35,8 @@ import (
 // the file that holds it, the distribution's library folder and the machine. A file of another
 // architecture is passed over. musl looks in the DT_RUNPATH, or with none the DT_RPATH, of the file
 // that needs the library and of each above it, then in its built-in folders, knows $ORIGIN alone,
-// and takes the first file it finds; the libraries it holds itself, libc and libm among them, are
-// the loader.
+// and takes the first file it finds, passing over unopened a folder whose path with the name is
+// muslPath bytes or more; the libraries it holds itself, libc and libm among them, are the loader.
 //
 // /etc/ld.so.cache, /etc/ld.so.conf and musl's /etc/ld-musl-<arch>.path are not read: behind the
 // block the loader reads them only where the caller granted /etc. LD_LIBRARY_PATH, LD_PRELOAD and
@@ -56,6 +56,10 @@ const (
 	maxDynamic   = 64 << 20
 )
 
+// muslPath is the bytes of the buffer musl's loader writes a searched folder, a slash and the
+// name in, with its end: a longer path it never opens, though the kernel would.
+const muslPath = 2*255 + 2
+
 // object is what the search reads of one ELF file: its architecture, the loader it names ("" for
 // none), the libraries it needs, its DT_RPATH and DT_RUNPATH, each nil when it has none, its
 // DT_SONAME, whether a loader loads it as a library, and unread, why its dynamic segment could not
@@ -71,7 +75,8 @@ type object struct {
 }
 
 // loadFiles is the files the search reads, a seam its rows run by on every system: resolve is a
-// path with every link in it resolved, and object the ELF file at a path.
+// path with every link in it resolved, or the kernel's error for it as written, and object the ELF
+// file at a path.
 type loadFiles interface {
 	resolve(name string) (string, error)
 	object(name string) (object, error)
@@ -456,9 +461,9 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 		return nil, noLoadf(s.prog, "%q needs the library %q, a path that is not absolute", by.name, name)
 	}
 	for _, dir := range dirs {
-		found := name
-		if dir != "" {
-			found = strings.TrimRight(dir, "/") + "/" + name
+		found, ok := s.joined(dir, name)
+		if !ok {
+			continue
 		}
 		resolved, err := s.files.resolve(found)
 		if err != nil {
@@ -484,6 +489,19 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 		return &loaded{object: *o, name: found, by: by, depth: by.depth + 1}, nil
 	}
 	return nil, noLoadf(s.prog, "the library %q, which %q needs, is not found in %q", name, by.name, dirs)
+}
+
+// joined is the path the loader opens for name in the folder dir, joined as it joins them and
+// never cleaned: name itself for the folder "", and false for a folder musl passes over unopened,
+// whose path with the name is muslPath bytes or more.
+func (s *search) joined(dir, name string) (string, bool) {
+	if dir == "" {
+		return name, true
+	}
+	if s.rules.musl && len(dir)+1+len(name) >= muslPath {
+		return "", false
+	}
+	return strings.TrimRight(dir, "/") + "/" + name, true
 }
 
 // read is the file found, at its real path: nil for one of another architecture, which glibc

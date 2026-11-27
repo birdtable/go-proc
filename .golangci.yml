@@ -615,6 +615,13 @@ linters:
       - path: (^|/)proc/sink_test\.go$
         linters: [forbidigo]
         source: "t\\.Skip\\(\"release tier: waits out a 3 s Timeout\"\\)"
+      # tests.admission.5: the skip allowed, by its own line and reason (go-proc-private#462). The
+      # kernel lets root search a folder of mode 0, so the row of a run path through one shows
+      # nothing as root. No tier runs as root, and task test fails on the skip where one does. Stays
+      # while the row needs a folder its caller cannot search.
+      - path: (^|/)sandbox/load_linux_test\.go$
+        linters: [forbidigo]
+        source: "t\\.Skip\\(\"skipped as root: root searches a folder of mode 0, so the kernel walks it\"\\)"
       # The start rule (message "proc-test-start:") holds proc's test files that build on Windows, and no other file. The
       # files of startTestProcess itself start processes, and the test files that build only off
       # Windows are not held by it. Stays for as long as the tests start processes on Windows.
