@@ -45,22 +45,20 @@ a library in a read-write folder that names /elsewhere/liby.so is refused as the
 A caller that means such a library names its folder, or one above it. To the search a shared
 library is any ET_DYN file without DF_1_PIE, so any such file on a run path counts as one.
 
-The search imitates two loaders' search orders, so it refuses up front what it finds, not every
-way a loader can reach a file. Where the loader would take a file the search does not judge, the
-search refuses the program with ErrUsage instead: a program or library naming a library by an audit
-or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY), under musl too, which reads none
-of them; and on glibc, a folder it
-searches whose glibc-hwcaps subfolder has a real path beneath no built-in folder of the loader,
-since glibc looks there first, in an order set by the machine. It also refuses a path it looks for
-that the kernel answers with an error other than not found, permission denied or not a folder, such
-as a link loop or a path past the kernel's length: glibc ends a folder list when the folder is there
-and the file in it answers such an error, and passes over a folder it cannot walk, and the search
-refuses both. musl names a found library by the folder as written, a slash and the name, and the
-search does too, so `$ORIGIN` in that library, and musl's 512-byte limit, read the same name. A
-library found where a loader's search order differs from the search's in some other way, such as
-in the tls/, platform and hwcap subfolders that glibc up to 2.36 looks in before a folder, is not
-promised refused up front. Behind the block such a library loads only from the folders above, and
-from anywhere else fails at load, with nothing granted for it.
+The search imitates two loaders' search orders, so it refuses up front what it finds, not every way
+a loader can reach a file. Refused up front as well, with ErrUsage: a program or library naming a
+library by an audit or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY), under musl
+too, which reads none of them; and on glibc, a folder it searches whose glibc-hwcaps subfolder has a
+real path beneath no built-in folder of the loader. It also refuses a path it looks for that the
+kernel answers with an error other than not found, permission denied or not a folder, such as a link
+loop or a path past the kernel's length: glibc ends a folder list when the folder is there and the
+file in it answers such an error, and passes over a folder it cannot walk, and the search refuses
+both. musl names a found library by the folder as written, a slash and the name, and the search does
+too, so `$ORIGIN` in that library, and musl's 512-byte limit, read the same name. A library found
+where a loader's search order differs from the search's in some other way, such as in the tls/,
+platform and hwcap subfolders that glibc up to 2.36 looks in before a folder, is not promised
+refused up front. Behind the block such a library loads only from the folders above, and from
+anywhere else fails at load, with nothing granted for it.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
