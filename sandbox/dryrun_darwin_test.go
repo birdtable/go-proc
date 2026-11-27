@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -127,6 +128,40 @@ func TestAMacDryRunItsBoundItsCapOrASignalEndedSaysSoWithItsFirstLine(t *testing
 	}
 	if len(rows) != 4 {
 		t.Fatalf("ran %d rows, want 4", len(rows))
+	}
+}
+
+// TestAMacDryRunWhoseExitNoSIGCHLDSaysIsErrNoBlockAndNothingIsRun: on this
+// Mac a dry run that exits 0, but whose exit the runtime takes no SIGCHLD
+// for within its bound, refuses the run before the exec, matching ErrNoBlock
+// and saying so, and the program is never run. The same dry run with its
+// SIGCHLD taken is the control: it reaches the exec, without which a wait
+// that always refused would pass the refused row too. The runtime's SIGCHLD
+// is stood in for by a channel the test fills or leaves empty.
+//
+// What it costs when this fails: a SIGCHLD from the dry run still pending at
+// the exec ends the sandbox with SIGILL before it sets the profile, as 12 of
+// 30,000 starts under a load of busy threads did, and the caller dies in
+// place of the program.
+func TestAMacDryRunWhoseExitNoSIGCHLDSaysIsErrNoBlockAndNothingIsRun(t *testing.T) {
+	t.Parallel()
+	prog := []string{"/usr/bin/false"}
+	for _, taken := range []bool{false, true} {
+		chld := make(chan os.Signal, 1)
+		if taken {
+			chld <- syscall.SIGCHLD
+		}
+		k := &dryRunOf{bound: 100 * time.Millisecond, prog: []string{"/usr/bin/true"}}
+		k.chld = chld
+		err := sandboxed(k, macosProfile, nil, prog[0], prog, nil)
+		switch {
+		case taken && !errors.Is(err, errExecKept):
+			t.Errorf("a dry run whose SIGCHLD was taken, the control: %v; want the exec reached", err)
+		case !taken && (!errors.Is(err, ErrNoBlock) || !strings.Contains(err.Error(), "no SIGCHLD for its exit was taken")):
+			t.Errorf("a dry run whose exit no SIGCHLD said: %v; want ErrNoBlock saying no SIGCHLD was taken", err)
+		case !taken && k.ran != nil:
+			t.Errorf("a dry run whose exit no SIGCHLD said: the sandbox was run with the program: %q", k.ran)
+		}
 	}
 }
 
