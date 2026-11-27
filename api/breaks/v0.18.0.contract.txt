@@ -1,0 +1,1 @@
+sandbox	TestTheLoadFoldersAreTheLoadersOwnSearch	linux	On Linux, the folders RunHolding adds are the real folder of the program's loader and of each library it needs, found as glibc or musl finds it with /etc/ld.so.cache, /etc/ld.so.conf, LD_LIBRARY_PATH, LD_PRELOAD and LD_AUDIT not read; a program that names no loader adds none.

@@ -363,6 +363,14 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			`the library "/opt/app/lib/liby.so", which "` + tool + `" needs, is the file "/elsewhere/liby.so.1", and its folder "/elsewhere" is beneath no folder held`,
 		},
 		{
+			// A soname is a name, never a real path: one that spells the link's real file does not
+			// pass that file over unjudged.
+			"the same link, after a library whose soname is the real file it leads to",
+			glibc(obj(glibcAMD, "liba.so", "liby.so").run("$ORIGIN/../lib")).file(inHeld, obj("").so("/elsewhere/liby.so.1")).
+				link("/opt/app/lib/liby.so", "/elsewhere/liby.so.1").file("/elsewhere/liby.so.1", obj("")),
+			`the library "/opt/app/lib/liby.so", which "` + tool + `" needs, is the file "/elsewhere/liby.so.1", and its folder "/elsewhere" is beneath no folder held`,
+		},
+		{
 			"a folder whose name only starts with the folder held", glibc(obj(glibcAMD, "/opt/application/libx.so")).file("/opt/application/libx.so", obj("")),
 			`its folder "/opt/application" is beneath no folder held`,
 		},
@@ -402,7 +410,7 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
 		}
 	}
-	if len(refused) < 7 || len(runs) < 6 {
+	if len(refused) < 8 || len(runs) < 6 {
 		t.Fatalf("ran %d refused rows and %d that run", len(refused), len(runs))
 	}
 }

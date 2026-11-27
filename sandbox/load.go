@@ -342,15 +342,18 @@ type loaded struct {
 }
 
 // search is one program's search: the files it reads, the program as the caller named it, the
-// caller's folders, by their real paths, its loader's rules, the program itself, each name and real
-// path a file is loaded by already, and the folders answered so far.
+// caller's folders, by their real paths, its loader's rules, the program itself, each name a file is
+// loaded by already (a needed name or a soname), each real path a file is loaded from already, and
+// the folders answered so far. Names and real paths are kept apart, so no name, a soname that is an
+// absolute path among them, makes a real path look loaded and passes its file over unjudged.
 type search struct {
 	files loadFiles
 	prog  string
 	held  []string
 	rules loaderRules
 	main  *loaded
-	known map[string]bool
+	names map[string]bool
+	reals map[string]bool
 	dirs  []string
 }
 
@@ -404,7 +407,7 @@ func loadFoldersOf(files loadFiles, arch, prog, resolved string, held []string) 
 		return nil, noLoadf(prog, "its loader %q, the file %q, is one netblock does not know", o.interp, loader)
 	}
 	s := &search{files: files, prog: prog, held: held, rules: rules, main: &loaded{object: o, name: resolved},
-		known: map[string]bool{path.Base(o.interp): true, loader: true}, dirs: []string{path.Dir(loader)}}
+		names: map[string]bool{path.Base(o.interp): true}, reals: map[string]bool{loader: true}, dirs: []string{path.Dir(loader)}}
 	return s.run()
 }
 
@@ -414,14 +417,14 @@ func (s *search) run() ([]string, error) {
 	queue := []*loaded{s.main}
 	for i := 0; i < len(queue); i++ {
 		for _, name := range queue[i].needed {
-			if s.known[name] || s.rules.musl && muslOwn(name) {
+			if s.names[name] || s.rules.musl && muslOwn(name) {
 				continue
 			}
 			lib, err := s.find(queue[i], name)
 			if err != nil {
 				return nil, err
 			}
-			s.known[name] = true
+			s.names[name] = true
 			if lib == nil {
 				continue
 			}
@@ -456,7 +459,7 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 		if err != nil {
 			continue
 		}
-		if s.known[resolved] {
+		if s.reals[resolved] {
 			return nil, nil
 		}
 		o, err := s.read(by, found, resolved)
@@ -466,9 +469,9 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 		if o == nil {
 			continue
 		}
-		s.known[resolved] = true
+		s.reals[resolved] = true
 		if !s.rules.musl && o.soname != "" {
-			s.known[o.soname] = true
+			s.names[o.soname] = true
 		}
 		if folder := path.Dir(resolved); !slices.Contains(s.dirs, folder) {
 			s.dirs = append(s.dirs, folder)
