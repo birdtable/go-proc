@@ -12,7 +12,7 @@ folders it may use. Use it to run a tool you do not fully trust, such as a build
 letting it reach the network. On Linux, a library it names by its full path, or finds by its run
 path, adds that library's real folder, and all beneath it, to what it may read and run, so a
 program written into a read-write folder can read a folder you never named if a shared library of
-its architecture lies there; go-proc-private#457 is the fix to come.
+its architecture lies there. [docs/sandbox.md](../docs/sandbox.md) names the fix to come.
 
 ```
 go get github.com/birdtable/go-proc/sandbox
