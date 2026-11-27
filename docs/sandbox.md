@@ -48,7 +48,8 @@ library is any ET_DYN file without DF_1_PIE, so any such file on a run path coun
 The search imitates two loaders' search orders, so it refuses up front what it finds, not every
 way a loader can reach a file. Where the loader would take a file the search does not judge, the
 search refuses the program with ErrUsage instead: a program or library naming a library by an audit
-or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY); and on glibc, a folder it
+or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY), under musl too, which reads none
+of them; and on glibc, a folder it
 searches whose glibc-hwcaps subfolder has a real path beneath no built-in folder of the loader,
 since glibc looks there first, in an order set by the machine. It also refuses a path it looks for
 that the kernel answers with an error other than not found, permission denied or not a folder, such
