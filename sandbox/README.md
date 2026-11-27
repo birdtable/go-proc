@@ -11,8 +11,8 @@ program with a weaker block than you asked for. You name the program, and for `R
 folders it may use. Use it to run a tool you do not fully trust, such as a build or a test, without
 letting it reach the network. On Linux, a library it names by its full path, or finds by its run
 path, adds that library's real folder, and all beneath it, to what it may read and run, so a
-program written into a read-write folder can read a folder you never named if a shared library of
-its architecture lies there. [docs/sandbox.md](../docs/sandbox.md) says what a later release does about it.
+program, or a library it loads, written into a read-write folder can read a folder you never named
+if a shared library of its architecture lies there. [docs/sandbox.md](../docs/sandbox.md) says what a later release does about it.
 
 ```
 go get github.com/birdtable/go-proc/sandbox
@@ -81,8 +81,8 @@ Know these before you rely on it.
   Name their folders yourself.
 
 Say what you can prove: on Linux, the program runs with the network closed and its files held to
-the folders you named. On macOS, it runs under the system sandbox with the network denied, and is
-not contained. [docs/sandbox.md](../docs/sandbox.md) has the full list, with the probe, the daemons it
+the folders you named and the folders its loader and libraries load from. On macOS, it runs under
+the system sandbox with the network denied, and is not contained. [docs/sandbox.md](../docs/sandbox.md) has the full list, with the probe, the daemons it
 closes and the folders it refuses.
 
 ## Reference

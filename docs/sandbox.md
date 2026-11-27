@@ -5,8 +5,9 @@ The reference for [`sandbox`](../sandbox). The package doc on
 
 ## What a caller may claim
 
-On Linux 6.12 or later, the program runs with the network closed, and
-with RunHolding its files held to the named folders, proved by the probe before each run. On macOS
+On Linux 6.12 or later, the program runs with the network closed, and with RunHolding its files
+held to the named folders and the folders its loader and libraries load from, proved by the probe
+before each run. On macOS
 the program runs under the system sandbox with the network denied, and is not contained. Elsewhere
 the program is not run. A caller may not say a program is contained on macOS, nor that a file a
 process outside the block reads later, a shell's profile or a git hook beneath a read-write folder,
@@ -26,9 +27,9 @@ folder among them is refused unless the caller names that folder.
 
 On Linux, a library the program names by its full path, or finds by its run path, adds that
 library's real folder, and all beneath it, to what the program may read and run; a library whose
-folder is / or /usr itself is refused instead. So a program written into a read-write folder can
-read a folder the caller never named, if a shared library of the program's architecture lies
-there, and a caller may not say such a program reads only the folders it named. A later release
+folder is / or /usr itself is refused instead. So a program, or a library it loads, written into a
+read-write folder can read a folder the caller never named, if a shared library of the program's
+architecture lies there, and a caller may not say such a program reads only the folders it named. A later release
 refuses such a library: one outside both the caller's folders and the loader's own default folders.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
