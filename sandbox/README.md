@@ -9,7 +9,10 @@ Linux, and the system sandbox, `sandbox-exec`, on macOS. It adds one block, the 
 files held to a few folders, set whole or refused where the system gives nothing. It never runs a
 program with a weaker block than you asked for. You name the program, and for `RunHolding` the
 folders it may use. Use it to run a tool you do not fully trust, such as a build or a test, without
-letting it reach the network.
+letting it reach the network. On Linux, a library it names by its full path, or finds by its run
+path, adds that library's real folder, and all beneath it, to what it may read and run, so a
+program written into a read-write folder can read a folder you never named if a shared library of
+its architecture lies there; go-proc-private#457 is the fix to come.
 
 ```
 go get github.com/birdtable/go-proc/sandbox
