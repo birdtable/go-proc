@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"path"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // The load folders of a program are the folders it reads to start, beyond its own: its loader's
@@ -42,8 +44,14 @@ import (
 // block the loader reads them only where the caller granted /etc. LD_LIBRARY_PATH, LD_PRELOAD and
 // LD_AUDIT are not read either. Each reaches only a folder the caller granted itself, so a
 // library found only by one of them is not found here, and the program is refused.
-// glibc's glibc-hwcaps folders lie beneath a folder it searches, so the grant of that folder
-// reaches them.
+//
+// What the search does not follow it refuses, where the loader would load a file the search never
+// judged: a file that names a library by DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY, which
+// glibc loads and musl does not read; on glibc, a folder searched whose glibc-hwcaps subfolder,
+// which glibc looks in first by levels of the machine, is beneath no built-in folder of the loader;
+// and a path the loader opens that the kernel answers with an error on which a loader stops, not
+// "no such file", "permission denied" or "not a folder": musl stops the whole load there, glibc
+// that file's list, and a link loop and a path past the kernel's length limit are such errors.
 //
 // The bounds of one search: maxLibraries files, maxLoadDepth files from the program to a library,
 // maxPathList folders in one DT_RPATH or DT_RUNPATH, maxInterp bytes of a loader's name and
@@ -62,8 +70,9 @@ const muslPath = 2*255 + 2
 
 // object is what the search reads of one ELF file: its architecture, the loader it names ("" for
 // none), the libraries it needs, its DT_RPATH and DT_RUNPATH, each nil when it has none, its
-// DT_SONAME, whether a loader loads it as a library, and unread, why its dynamic segment could not
-// be read when it has one.
+// DT_SONAME, whether a loader loads it as a library, unfollowed, a tag by which it names a library
+// the search does not follow (0 for none), and unread, why its dynamic segment could not be read
+// when it has one.
 type object struct {
 	class          elf.Class
 	machine        elf.Machine
@@ -71,6 +80,7 @@ type object struct {
 	needed         []string
 	rpath, runpath []string
 	library        bool
+	unfollowed     elf.DynTag
 	unread         error
 }
 
@@ -80,6 +90,12 @@ type object struct {
 type loadFiles interface {
 	resolve(name string) (string, error)
 	object(name string) (object, error)
+}
+
+// unfollowedTags is the tags by which a file names a library to load that the search does not
+// follow: glibc's audit libraries and filtees.
+func unfollowedTags() []elf.DynTag {
+	return []elf.DynTag{elf.DT_AUDIT, elf.DT_DEPAUDIT, elf.DT_FILTER, elf.DT_AUXILIARY}
 }
 
 // errUntold is a path the kernel walks as written, so the loader opens the file there, whose real
@@ -134,8 +150,8 @@ func readObject(r io.ReaderAt, page uint64) (o object, err error) {
 // readDynamic fills o from f's dynamic segment, dynamic, as the loaders read it: at the segment's
 // address, never by a section header, its entries up to the first DT_NULL, and each string at its
 // offset in the table DT_STRTAB and DT_STRSZ name, each read from the file as its PT_LOAD
-// segments map it. A tag given twice counts as the loaders count it, by its last value. o is a
-// library when it is a shared object, ET_DYN, and no program, DF_1_PIE, which glibc refuses to
+// segments map it. A tag given twice counts as the loaders count it, by its last value. The first
+// of unfollowedTags it carries is kept, its value unread. o is a library when it is a shared object, ET_DYN, and no program, DF_1_PIE, which glibc refuses to
 // load as one. It says why it cannot read them, and then fills nothing: a second dynamic segment,
 // PT_LOAD segments out of order or sharing a page, where the bytes at an address are those of the
 // segment mapped last, an address no PT_LOAD maps from the file, a segment or table over
@@ -178,6 +194,11 @@ func (o *object) readDynamic(f *elf.File, dynamic []*elf.Prog, page uint64) erro
 	if soname, ok := d.last[elf.DT_SONAME]; ok {
 		if read.soname, err = d.str(soname); err != nil {
 			return err
+		}
+	}
+	for _, tag := range unfollowedTags() {
+		if _, ok := d.last[tag]; ok && read.unfollowed == 0 {
+			read.unfollowed = tag
 		}
 	}
 	read.library = f.Type == elf.ET_DYN && d.last[elf.DT_FLAGS_1]&uint64(elf.DF_1_PIE) == 0
@@ -352,18 +373,19 @@ type loaded struct {
 
 // search is one program's search: the files it reads, the program as the caller named it, the
 // caller's folders, by their real paths, its loader's rules, the program itself, each name a file is
-// loaded by already (a needed name or a soname), each real path a file is loaded from already, and
-// the folders answered so far. Names and real paths are kept apart, so no name, a soname that is an
+// loaded by already (a needed name or a soname), each real path a file is loaded from already,
+// each folder whose glibc-hwcaps subfolder was judged, and the folders answered so far. Names and real paths are kept apart, so no name, a soname that is an
 // absolute path among them, makes a real path look loaded and passes its file over unjudged.
 type search struct {
-	files loadFiles
-	prog  string
-	held  []string
-	rules loaderRules
-	main  *loaded
-	names map[string]bool
-	reals map[string]bool
-	dirs  []string
+	files  loadFiles
+	prog   string
+	held   []string
+	rules  loaderRules
+	main   *loaded
+	names  map[string]bool
+	reals  map[string]bool
+	hwcaps map[string]bool
+	dirs   []string
 }
 
 // loadFolders is the folders the program prog, an absolute path, needs to load on Linux for the
@@ -372,8 +394,9 @@ type search struct {
 // for, which the block refuses itself. A file that is no ELF file, a #! script, a loader the
 // search does not know, a list with a $NAME it does not know or a folder that is not an absolute
 // path, a library that is not found, a library beneath neither a folder of held, the caller's
-// folders by their real paths, nor a built-in folder of the loader, and a search over its bounds
-// are ErrUsage, naming the file. The first folder is the loader's own; the rest come from the
+// folders by their real paths, nor a built-in folder of the loader, one whose real path cannot be
+// told, what the search does not follow, and a search over its bounds are ErrUsage, naming the
+// file. The first folder is the loader's own; the rest come from the
 // program's bytes and its libraries'.
 func loadFolders(files loadFiles, arch, prog string, held []string) ([]string, error) {
 	if _, ok := loadersOf(arch); !ok {
@@ -404,6 +427,9 @@ func loadFoldersOf(files loadFiles, arch, prog, resolved string, held []string) 
 	if o.unread != nil {
 		return nil, noLoadf(prog, "%v", o.unread)
 	}
+	if o.unfollowed != 0 {
+		return nil, noLoadf(prog, "it names a library by %v, which the search does not follow", o.unfollowed)
+	}
 	loader, err := files.resolve(o.interp)
 	if err != nil {
 		return nil, noLoadf(prog, "its loader %q cannot be found: %v", o.interp, err)
@@ -416,7 +442,7 @@ func loadFoldersOf(files loadFiles, arch, prog, resolved string, held []string) 
 		return nil, noLoadf(prog, "its loader %q, the file %q, is one netblock does not know", o.interp, loader)
 	}
 	s := &search{files: files, prog: prog, held: held, rules: rules, main: &loaded{object: o, name: resolved},
-		names: map[string]bool{path.Base(o.interp): true}, reals: map[string]bool{loader: true}, dirs: []string{path.Dir(loader)}}
+		names: map[string]bool{path.Base(o.interp): true}, reals: map[string]bool{loader: true}, hwcaps: map[string]bool{}, dirs: []string{path.Dir(loader)}}
 	return s.run()
 }
 
@@ -495,8 +521,10 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 }
 
 // candidate is the path the loader opens for name in the folder dir and its real path: no real
-// path for a file the loader passes over, unopened or one the kernel will not walk to, and
-// ErrUsage for a file it opens whose real path cannot be told.
+// path for a file the loader passes over, unopened or one the kernel will not walk to with an
+// error both loaders pass over, and ErrUsage for a file it opens whose real path cannot be told,
+// for a path the kernel answers with an error on which a loader stops, and, past those, for a folder
+// whose glibc-hwcaps subfolder hwcapsOf refuses.
 func (s *search) candidate(by *loaded, dir, name string) (found, resolved string, err error) {
 	found, ok := s.joined(dir, name)
 	if !ok {
@@ -506,28 +534,64 @@ func (s *search) candidate(by *loaded, dir, name string) (found, resolved string
 	switch {
 	case errors.Is(err, errUntold):
 		return "", "", noLoadf(s.prog, "the library %q, which %q needs, is the file %q, and %v", name, by.name, found, err)
+	case err != nil && !passedOver(err):
+		return "", "", noLoadf(s.prog, "the library %q, which %q needs, is looked for as %q, which the kernel answers with an error on which a loader stops looking: %v", name, by.name, found, err)
 	case err != nil:
-		return "", "", nil
+		found, resolved = "", ""
 	}
-	return found, resolved, nil
+	return found, resolved, s.hwcapsOf(by, dir, name)
+}
+
+// passedOver says whether err, the kernel's answer for a path a loader opens, is one on which both
+// loaders go on to the next folder: no such file, permission denied, or a part that is no folder.
+func passedOver(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// hwcapsOf is ErrUsage, on glibc, for a folder dir looked in for name, which by needs, whose
+// glibc-hwcaps subfolder is there and beneath no built-in folder of the loader, by its real path,
+// or the kernel answers with an error on which a loader stops: glibc looks in it first, in an
+// order the machine's levels set, which the search does not follow. Each folder is judged once.
+func (s *search) hwcapsOf(by *loaded, dir, name string) error {
+	if s.rules.musl || dir == "" || s.hwcaps[dir] {
+		return nil
+	}
+	s.hwcaps[dir] = true
+	sub := strings.TrimRight(dir, "/") + "/glibc-hwcaps"
+	real, err := s.files.resolve(sub)
+	why := fmt.Sprintf("its real path %q is beneath no built-in folder of the loader", real)
+	switch {
+	case err == nil && slices.ContainsFunc(s.rules.defaults, func(d string) bool { return beneathSlash(real, d) }):
+		return nil
+	case err != nil && !errors.Is(err, errUntold) && passedOver(err):
+		return nil
+	case err != nil:
+		why = err.Error()
+	}
+	return noLoadf(s.prog, "the library %q, which %q needs, is looked for in %q, where glibc first looks in %q by the machine's levels, which the search does not follow, and %s", name, by.name, dir, sub, why)
 }
 
 // joined is the path the loader opens for name in the folder dir, joined as it joins them and
-// never cleaned: name itself for the folder "", and false for a folder musl passes over unopened,
-// whose path with the name is muslPath bytes or more.
+// never cleaned: name itself for the folder "", glibc's with the folder's closing slashes cut, and
+// musl's with the folder as written, so a library's $ORIGIN and the bytes musl measures are its
+// own, and false for a folder musl passes over unopened, whose path with the name is muslPath bytes
+// or more.
 func (s *search) joined(dir, name string) (string, bool) {
-	if dir == "" {
+	switch {
+	case dir == "":
 		return name, true
-	}
-	if s.rules.musl && len(dir)+1+len(name) >= muslPath {
+	case s.rules.musl && len(dir)+1+len(name) >= muslPath:
 		return "", false
+	case s.rules.musl:
+		return dir + "/" + name, true
 	}
 	return strings.TrimRight(dir, "/") + "/" + name, true
 }
 
 // read is the file found, at its real path: nil for one of another architecture, which glibc
 // passes over and musl refuses. One of the program's architecture is refused when it is no
-// library, a program or a file of another type, when its real folder is the root or /usr itself,
+// library, a program or a file of another type, when it names a library by a tag the search does
+// not follow, when its real folder is the root or /usr itself,
 // which no load grants, and when its real folder is beneath neither a folder the caller named nor
 // a built-in folder of the loader, which no caller judged.
 func (s *search) read(by *loaded, found, resolved string) (*object, error) {
@@ -538,6 +602,9 @@ func (s *search) read(by *loaded, found, resolved string) (*object, error) {
 	if o.class == s.main.class && o.machine == s.main.machine {
 		if !o.library {
 			return nil, noLoadf(s.prog, "the library %q, which %q needs, is a program or another file a loader does not load as a library", found, by.name)
+		}
+		if o.unfollowed != 0 {
+			return nil, noLoadf(s.prog, "the library %q, which %q needs, names a library by %v, which the search does not follow", found, by.name, o.unfollowed)
 		}
 		if folder := path.Dir(resolved); tooWide(folder) {
 			return nil, noLoadf(s.prog, "the library %q, which %q needs, is the file %q, and its folder %q is too wide to grant", found, by.name, resolved, folder)

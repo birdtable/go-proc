@@ -86,10 +86,12 @@ Know these before you rely on it.
   program is refused whatever folders are named. Those named by `LD_PRELOAD` or opened by `dlopen`
   are not looked for: name their folders yourself.
 - **The up-front refusal covers what the load search finds**, not every way a loader can reach a
-  library: one named by an audit or filter tag, one in a `glibc-hwcaps` subfolder, and one found
-  where a loader's search order differs from the search's are not promised refused before the run. Behind
-  the block such a library loads only from the folders the block grants, and from anywhere else
-  fails at load.
+  library. A program is refused with `ErrUsage` when it, or a library it loads, names a library by
+  an audit or filter tag, when glibc would first look in a `glibc-hwcaps` subfolder beneath no
+  built-in folder, and when a path looked for is one on which a loader stops, such as a link loop.
+  A library found where a loader's search order differs from the search's some other way is not
+  promised refused before the run. Behind the block such a library loads only from the folders the
+  block grants, and from anywhere else fails at load.
 
 Say what you can prove: on Linux, the program runs with the network closed and its files held to
 the folders you named and the folders its loader and libraries load from. On macOS, it runs under

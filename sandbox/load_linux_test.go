@@ -118,11 +118,15 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 // library named through a link in the folder held and "..", by its full path or by a run path, is
 // judged by the file the kernel opens, the link's target's, and refused the same way, though a
 // library of that name is in the folder held. So is a library found by a run path whose first
-// folder the kernel will not walk as written, through a folder only root may search, a link loop
-// past the kernel's 40 links or a path past its 4096 bytes: the loader passes that folder over and
-// opens the file in the next, outside the folder held, though the first folder's text reaches a
-// library of that name in it. As root, whom the kernel lets search a folder of mode 0, the loader
-// opens the library in the folder held through the first, and Check grants it. A library found by
+// folder the kernel will not walk as written, through a folder only root may search: the loader
+// passes that folder over and opens the file in the next, outside the folder held, though the first
+// folder's text reaches a library of that name in it. As root, whom the kernel lets search a folder
+// of mode 0, the loader opens the library in the folder held through the first, and Check grants
+// it. A library looked for first as a path the kernel answers with an error on which a loader stops,
+// through a link loop past its 40 links, as a file that is a link to itself, or past its 4096 bytes,
+// is refused for that, ahead of the one in the next folder, but where the loader is musl's, which
+// never opens a path of muslPath bytes or more and takes the next folder's; and so is a program that
+// names a library by DT_AUDIT. A library found by
 // a run path whose first folder the kernel walks by short links to a real path past its 4096 bytes
 // is refused, the loader opening it though its real folder cannot be told, and never passed over
 // for the library of that name in bin, held and the next folder.
@@ -183,6 +187,22 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 			return `the library "` + found + `", which "` + prog + `" needs, is the file "` + lib + `", and its folder "` + elsewhere + `" is beneath no folder held`
 		}
 	}
+	stopped := func(at string) func(string) string {
+		return func(prog string) string {
+			return `the library "libx.so", which "` + prog + `" needs, is looked for as "` + at + `/libx.so", which the kernel answers with an error on which a loader stops looking`
+		}
+	}
+	tooLong := stopped(long)
+	if names, _ := loadersOf(builtArch); host.interp == names.musl {
+		tooLong = beneathNone(lib)
+	}
+	self := filepath.Join(dir, "bin", "self")
+	if err := os.Mkdir(self, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("libx.so", filepath.Join(self, "libx.so")); err != nil {
+		t.Fatal(err)
+	}
 	untold := func(prog string) string {
 		return `the library "libx.so", which "` + prog + `" needs, is the file "` + far + `/libx.so", and its real path cannot be told`
 	}
@@ -195,8 +215,10 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 		{"by-full-path", beneathNone(through + "/libx.so"), []dynEntry{{elf.DT_NEEDED, through + "/libx.so"}}, false},
 		{"by-run-path", beneathNone(through + "/libx.so"), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, through}}, false},
 		{"past-a-folder-shut", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, shut + ":" + elsewhere}}, true},
-		{"past-a-link-loop", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, loop + ":" + elsewhere}}, false},
-		{"past-a-path-too-long", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, long + ":" + elsewhere}}, false},
+		{"at-a-link-loop", stopped(loop), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, loop + ":" + elsewhere}}, false},
+		{"at-a-file-linked-to-itself", stopped(self), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, self + ":" + elsewhere}}, false},
+		{"at-a-path-too-long", tooLong, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, long + ":" + elsewhere}}, false},
+		{"by-an-audit-tag", func(string) string { return "it names a library by DT_AUDIT, which the search does not follow" }, []dynEntry{{elf.DT_AUDIT, lib}}, false},
 		{"through-short-links-too-long", untold, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, far + ":" + filepath.Join(dir, "bin")}}, false},
 	} {
 		t.Run(r.name, func(t *testing.T) {
