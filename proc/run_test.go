@@ -1,7 +1,9 @@
 package proc
 
 import (
+	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -766,6 +768,58 @@ func TestEachWayARunIsEndedIsAnEnded(t *testing.T) {
 			t.Errorf("Ended{%q} says %q, want its own words", why, msg)
 		}
 	}
+}
+
+// TestEndIsTheProgramsOwnExitAndNoneForARunGoProcEndedOrRefused: a program that exits 0 or 3
+// reads EndExited with that Code, no Signal and no Status, and no error. A run its Timeout ends and
+// a run refused before it starts read EndNone, no Signal and no Status, with Code -1 and their
+// errors saying why: on Unix the Timeout's kill is a signal, which End does not report as the
+// program's own end.
+//
+// What it costs when this fails: a caller reads a run go-proc ended, or never started, as the
+// program's own end, or a program's exit as something else (go-proc-private#474).
+func TestEndIsTheProgramsOwnExitAndNoneForARunGoProcEndedOrRefused(t *testing.T) {
+	t.Parallel()
+	for _, code := range []int{0, 3} {
+		res, err := Run(t.Context(), helperCmd(t, "exit-code", strconv.Itoa(code)))
+		if err != nil || res.Code != code || res.End != EndExited || res.Signal != nil || res.Status != 0 {
+			t.Errorf("a program that exits %d: %v, Code %d, End %q, Signal %v, Status %#x, want no error, Code %d and EndExited alone", code, err, res.Code, res.End, res.Signal, res.Status, code)
+		}
+	}
+	timed := helperCmd(t, "hold")
+	timed.Timeout = pastStart
+	res, err := Run(t.Context(), timed)
+	if !endedWith(err, WhyDeadline) || res.Code != -1 || res.End != EndNone || res.Signal != nil || res.Status != 0 {
+		t.Errorf("a run that reached its Timeout: %v, Code %d, End %q, Signal %v, Status %#x, want Ended{%s}, Code -1 and EndNone alone", err, res.Code, res.End, res.Signal, res.Status, WhyDeadline)
+	}
+	refused := helperCmd(t, "exit-code", "0")
+	refused.Timeout = 0
+	res, err = Run(t.Context(), refused)
+	if !errors.Is(err, ErrRefused) || res.Code != -1 || res.End != EndNone || res.Signal != nil || res.Status != 0 {
+		t.Errorf("a run refused for its Timeout: %v, Code %d, End %q, Signal %v, Status %#x, want ErrRefused, Code -1 and EndNone alone", err, res.Code, res.End, res.Signal, res.Status)
+	}
+}
+
+// onPid runs c, a pid-hold helper's, with its stdout to a pipe whose first line, the helper's pid,
+// is given to act while the run waits; the rest is read and dropped. It gives the run's Result and
+// error, and act's error, or why no pid was read.
+func onPid(t *testing.T, c Cmd, act func(pid int) error) (Result, error, error) {
+	t.Helper()
+	r, w := io.Pipe()
+	c.Stdout = w
+	acted := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(r).ReadString('\n')
+		pid, perr := strconv.Atoi(strings.TrimSpace(line))
+		if err = cmp.Or(err, perr); err == nil {
+			err = act(pid)
+		}
+		acted <- err
+		_, _ = io.Copy(io.Discard, r)
+	}()
+	res, err := Run(t.Context(), c)
+	_ = w.Close()
+	return res, err, <-acted
 }
 
 // TestARunOnAnEndedContextIsCancelledAndStartsNothing: a run whose parent context has already ended

@@ -381,6 +381,24 @@ const (
 	PeakProcessCommitted PeakKind = "process-committed"
 )
 
+// EndKind is how a run's program ended, as far as its system can tell.
+type EndKind string
+
+// The kinds of a Result.End, a closed list.
+const (
+	// EndNone is a run refused, or ended by go-proc (its Timeout, MaxOutput, ctx, a limit, or
+	// WhyUnkillable or WhyEscaped), whose error says which.
+	EndNone EndKind = ""
+	// EndExited is the program's exit, with Code. On Windows so is an end by TerminateProcess with a
+	// code below 0xC0000000: Windows keeps no mark of who chose a code, so no library tells them apart.
+	EndExited EndKind = "exited"
+	// EndSignal is an end by a signal go-proc did not send, with Signal naming it (Unix).
+	EndSignal EndKind = "signal"
+	// EndAbnormal is an exit code of 0xC0000000 and above, an NTSTATUS error value such as an access
+	// violation, with Status (Windows); a code chosen by the program, or by TerminateProcess, reads so too.
+	EndAbnormal EndKind = "abnormal"
+)
+
 // Result is what a run's program printed and how it exited.
 type Result struct {
 	// Stdout and Stderr are at most MaxOutput bytes each, the first the program wrote.
@@ -388,6 +406,12 @@ type Result struct {
 	// Code is the program's exit code: -1 when the run was refused or ended, or the program was
 	// killed by a signal.
 	Code int
+	// End is how the program ended, as far as its system can tell; Code and the error are as without it.
+	End EndKind
+	// Signal is the signal when End is EndSignal, and nil otherwise.
+	Signal os.Signal
+	// Status is the NTSTATUS value when End is EndAbnormal, and 0 otherwise.
+	Status uint32
 	// Peak is the most memory the program held at once, in bytes, when the run set Cmd.ReadPeak and
 	// PeakRead is true; 0 otherwise. Cmd.ReadPeak says what it counts on each system.
 	Peak int64
@@ -800,9 +824,10 @@ func Run(ctx context.Context, c Cmd) (Result, error) {
 	readPeak := c.ReadPeak && !unkillable
 	treeErr := tree.end(readPeak)
 	res := Result{Stdout: out.stdout.bytes(), Stderr: out.stderr.bytes(), Code: exitCode(cmd, unkillable)}
+	res.End, res.Signal, res.Status = endingOf(cmd, unkillable)
 	why := endings(ctx, out, g, escaped && !unkillable)
 	if len(why) > 0 {
-		res.Code = -1
+		res.Code, res.End, res.Signal, res.Status = -1, EndNone, nil, 0
 		// The program's exit is the kill's doing.
 		waited = nil
 	}
@@ -1076,6 +1101,15 @@ func (w *capped) bytes() []byte {
 		return nil
 	}
 	return w.buf.Bytes()
+}
+
+// endingOf is how the reaped leader ended, as this system's endOf reads its state, and EndNone for an
+// unkillable run's leader, whose state is not read, as exitCode says.
+func endingOf(cmd *process, unkillable bool) (EndKind, os.Signal, uint32) {
+	if unkillable {
+		return EndNone, nil, 0
+	}
+	return endOf(cmd.ProcessState)
 }
 
 // exitCode is the reaped leader's exit code. An unkillable run's leader is not reaped by Run: a

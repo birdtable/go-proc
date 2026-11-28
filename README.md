@@ -154,6 +154,14 @@ Windows task that holds a `%` matches `ErrPercent` instead, and neither of the o
 `load`'s `ErrNoAverage`. `gitenv` refuses nothing by system. The package docs say exactly what each
 bound holds on each system.
 
+How a program ended, `Result.End`, by system:
+
+| System | `Result.End` |
+|---|---|
+| Linux, macOS and other Unix | an exit, with `Code`, or an end by a signal go-proc didn't send, with `Signal` naming it |
+| Windows | an exit, with `Code`, or an exit code of 0xC0000000 and above, an NTSTATUS error such as an access violation, with `Status`; a program ended by `TerminateProcess` with a lower code reads as an exit with that code, as no library can tell the two apart |
+| every system | `EndNone` for a run go-proc refused or ended, its error saying why |
+
 ## Stability
 
 v0: the API may change between minor versions. [`api/contract.txt`](api/contract.txt) lists what a
