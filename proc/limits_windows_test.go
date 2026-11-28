@@ -19,8 +19,8 @@ func TestAJobHeldToTreeMemoryEndsTheRunWithWhyLimit(t *testing.T) {
 	c := helperCmd(t, "hog", "1024")
 	c.Limits = Limits{TreeMemory: 256 << 20}
 	res, err := Run(t.Context(), c)
-	if !endedWith(err, WhyLimit) || res.Code != -1 || bytes.Contains(res.Stdout, []byte("done")) {
-		t.Errorf("a hog held to 256 MiB: %v, Code %d, stdout %q, stderr %q, want WhyLimit, Code -1 and no done", err, res.Code, res.Stdout, res.Stderr)
+	if !endedWith(err, WhyLimit) || res.Code != -1 || res.End != EndNone || res.Status != 0 || bytes.Contains(res.Stdout, []byte("done")) {
+		t.Errorf("a hog held to 256 MiB: %v, Code %d, End %q, Status %#x, stdout %q, stderr %q, want WhyLimit, Code -1, EndNone and no done", err, res.Code, res.End, res.Status, res.Stdout, res.Stderr)
 	}
 }
 

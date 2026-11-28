@@ -159,7 +159,7 @@ How a program ended, `Result.End`, by system:
 | System | `Result.End` |
 |---|---|
 | Linux, macOS and other Unix | an exit, with `Code`, or an end by a signal go-proc didn't send, with `Signal` naming it |
-| Windows | an exit, with `Code`, or an exit code of 0xC0000000 and above, an NTSTATUS error such as an access violation, with `Status`; a program ended by `TerminateProcess` with a lower code reads as an exit with that code, as no library can tell the two apart |
+| Windows | an exit, with `Code`, or an exit code of 0xC0000000 and above, an NTSTATUS error such as an access violation, with `Status`; a program ended by `TerminateProcess` with a lower code reads as an exit with that code, as no library can tell the two apart, and so does an unhandled exception of warning severity, such as STATUS_BREAKPOINT (0x80000003) |
 | every system | `EndNone` for a run go-proc refused or ended, its error saying why |
 
 ## Stability

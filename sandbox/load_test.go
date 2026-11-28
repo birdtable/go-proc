@@ -41,27 +41,28 @@ type fake struct {
 }
 
 // resolve follows name as the kernel does: one name at a time from the root, a link's target put
-// in its place, and ".." taken in the folder reached, so a ".." after a link leaves its target. A
+// in its place, and ".." taken in the folder reached, so a ".." after a link leaves its target, and
+// says whether the real path reached is a folder and no file. A
 // name of 4096 bytes or more, or with a part of more than 255, is the kernel's ENAMETOOLONG, a walk
 // past 40 links its ELOOP, anything after a file, a closing slash among it, its ENOTDIR, and the
 // empty name its ENOENT.
-func (f fake) resolve(name string) (string, error) {
+func (f fake) resolve(name string) (string, bool, error) {
 	switch {
 	case len(name) >= 4096:
-		return "", syscall.ENAMETOOLONG
+		return "", false, syscall.ENAMETOOLONG
 	case name == "":
-		return "", fs.ErrNotExist
+		return "", false, fs.ErrNotExist
 	}
 	cur, rest := "/", strings.Split(name, "/")
 	for hops := 0; len(rest) > 0; {
 		if f.isFile(cur) {
-			return "", syscall.ENOTDIR
+			return "", false, syscall.ENOTDIR
 		}
 		part := rest[0]
 		rest = rest[1:]
 		switch {
 		case len(part) > 255:
-			return "", syscall.ENAMETOOLONG
+			return "", false, syscall.ENAMETOOLONG
 		case part == "" || part == ".":
 			continue
 		case part == "..":
@@ -74,7 +75,7 @@ func (f fake) resolve(name string) (string, error) {
 			continue
 		}
 		if hops++; hops > 40 {
-			return "", syscall.ELOOP
+			return "", false, syscall.ELOOP
 		}
 		if path.IsAbs(to) {
 			cur = "/"
@@ -84,12 +85,12 @@ func (f fake) resolve(name string) (string, error) {
 		rest = append(strings.Split(to, "/"), rest...)
 	}
 	if !f.isFile(cur) && !f.isFolder(cur) {
-		return "", fs.ErrNotExist
+		return "", false, fs.ErrNotExist
 	}
 	if len(cur) >= 4096 {
-		return "", fmt.Errorf("%w: lstat %s: file name too long", errUntold, cur)
+		return "", false, fmt.Errorf("%w: lstat %s: file name too long", errUntold, cur)
 	}
-	return cur, nil
+	return cur, !f.isFile(cur), nil
 }
 
 // isFile says whether the real path name is a file, an ELF file or another, and isFolder whether
@@ -417,7 +418,7 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // a glibc whose loader names no release or two, a folder whose legacy subfolder, tls, a platform's
 // or a hwcap's, is beneath no built-in folder, in the folder held or through a link out of a
 // built-in folder, or is a link loop, and on arm64 one with an asimd subfolder, outside the default
-// mask, or a cpuid one. So is, on glibc 2.37 or one whose release cannot be told, a folder in the
+// mask, or a cpuid one, or a program's own folder, by $ORIGIN, with an sb one. So is, on glibc 2.37 or one whose release cannot be told, a folder in the
 // list written in 4,094 or 4,095 bytes, and on 2.39 in 4,094, where the name is past the length
 // limit, and on 2.37 the root where the name is a link loop.
 // A program whose libraries are all beneath the folder held or a built-in folder of its loader
@@ -432,7 +433,12 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // on glibc 2.37, which reads no legacy subfolder, by a folder held with a tls subfolder, and on
 // arm64 with an asimd one; on glibc 2.36, by a built-in folder with its own, and on arm64 with its
 // own sve; on musl, by a folder held with one; and past a folder in the list written in 4,096
-// bytes on glibc 2.37, and in 4,095 or 4,096 on 2.39.
+// bytes on glibc 2.37, and in 4,095 or 4,096 on 2.39. A file named like a subfolder glibc looks in
+// first is no folder, which glibc passes over: on glibc, a folder held beside a file named
+// glibc-hwcaps; on glibc 2.36, one beside a file named tls; on arm64, of a release its loader does
+// not tell, a program's own folder, by $ORIGIN, beside a file named sb; and on glibc 2.37, or one
+// whose release cannot be told, past a file in the list written in 4,095 bytes, to the next
+// folder's library.
 //
 // What it costs when this fails: a program written into a read-write folder names a library in a
 // folder the caller never named, and RunHolding grants the program the read and the run of all of
@@ -532,6 +538,21 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			f.text(loader, head)
 		}
 		return f
+	}
+	// fileAtLimitOn is atLimitOn whose first folder is the file /opt/app/f written in n bytes, so the
+	// stat glibc up to 2.37 asks, without the closing slash, finds it, and the one with the slash is
+	// past the length limit for n of 4,095.
+	fileAtLimitOn := func(head string, n int) fake {
+		f := passes(glibcAMD, atLimit(n-2)+"/f").file("/opt/app/f", obj(""))
+		if head != "" {
+			f.text(loader, head)
+		}
+		return f
+	}
+	// originARM is glibc's arm64 program finding liba.so in its own folder by $ORIGIN, on a loader
+	// whose release it does not tell.
+	originARM := func() fake {
+		return debianARM().file(tool, obj(glibcARM, "liba.so").run("$ORIGIN")).file("/opt/app/bin/liba.so", obj(""))
 	}
 	// deep is 25 folders, each a slash and 100 bytes of the letter c: 2,525 bytes, so two of them
 	// make a path past the kernel's length limit.
@@ -743,6 +764,10 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			`where glibc up to 2.36 first looks in its legacy subfolder "/opt/app/lib/cpuid" by the machine's hardware`,
 		},
 		{
+			"glibc of a release its loader does not tell, on arm64: a program's own folder, by $ORIGIN, with an sb subfolder", originARM().dir("/opt/app/bin/sb"),
+			`where glibc up to 2.36 first looks in its legacy subfolder "/opt/app/bin/sb" by the machine's hardware, which the search does not follow, and its real path "/opt/app/bin/sb" is beneath no built-in folder of the loader`,
+		},
+		{
 			"glibc 2.36: a folder held whose legacy subfolder is a link loop",
 			legacy("x", glibc236).link("/opt/app/lib/xeon_phi", "/opt/app/lib/xeon_phi"),
 			`where glibc 2.36 first looks in its legacy subfolder "/opt/app/lib/xeon_phi" by the machine's hardware, which the search does not follow, and too many levels of symbolic links`,
@@ -796,6 +821,17 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		{"musl: a run path folder whose path with the name is a byte under muslPath", beyondMusl(1), held, []string{"/lib", muslDir(1)}},
 		{"musl: the same $ORIGIN folder, by a run path with no closing slash", slashed("/opt/app/lib"), held, []string{"/lib", "/opt/app/lib", padded}},
 		{"glibc: a built-in folder with its own glibc-hwcaps subfolder", glibc(obj(glibcAMD, "libc.so.6")).dir("/lib/x86_64-linux-gnu/glibc-hwcaps"), held, []string{gnuAMD}},
+		{
+			"glibc: a folder held beside a file named glibc-hwcaps, which glibc passes over",
+			glibc(obj(glibcAMD, "liba.so").run("/opt/app/lib")).file("/opt/app/lib/glibc-hwcaps", obj("")).file(inHeld, obj("")), held, []string{gnuAMD, "/opt/app/lib"},
+		},
+		{"glibc 2.36: a folder held beside a file named tls, which glibc passes over", legacy("x", glibc236).file("/opt/app/lib/tls", obj("")), held, []string{gnuAMD, "/opt/app/lib"}},
+		{
+			"glibc of a release its loader does not tell, on arm64: a program's own folder, by $ORIGIN, beside a file named sb, which glibc passes over",
+			originARM().file("/opt/app/bin/sb", obj("")), held, []string{"/usr/lib/aarch64-linux-gnu", "/opt/app/bin"},
+		},
+		{"glibc 2.37: a file in the list written in 4,095 bytes, which glibc passes over", fileAtLimitOn(glibc237, 4095), held, []string{gnuAMD, "/opt/app/good"}},
+		{"glibc of a release its loader does not tell: a file in the list written in 4,095 bytes, which glibc passes over", fileAtLimitOn("", 4095), held, []string{gnuAMD, "/opt/app/good"}},
 		{
 			"musl: a folder held with a glibc-hwcaps subfolder, which musl does not read",
 			alpine().file(tool, obj(muslAMD, "liba.so").run("/opt/app/lib")).dir("/opt/app/lib/glibc-hwcaps").file(inHeld, obj("")), held, []string{"/lib", "/opt/app/lib"},

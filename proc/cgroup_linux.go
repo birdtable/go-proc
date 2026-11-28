@@ -92,10 +92,6 @@ var errShimEnded = errors.New("the run's shim ended, or was skipped, before it t
 // the run's cgroup held a capability or had not set no_new_privs: a program that skipped the shim and wrote the byte itself.
 var errShimForged = errors.New("the run's report said the shim was ready, but a process of the run's cgroup holds a capability or has not set no_new_privs, as one that skipped the shim does: a start that skipped it, and a program that writes the ready byte itself")
 
-// errLimitLost ends a Contained run whose cgroup lost its limit while the tree ran (as memory leaves
-// it at the tree's write of -memory to its parent's cgroup.subtree_control), never WhyLimit.
-var errLimitLost = errors.New("proc: the run's cgroup lost the TreeMemory limit the run set, and the run killed its tree")
-
 // errInRun refuses a cgroup, for a TreeMemory or a ReadPeak, from within a run's (whose limit, kill
 // and peak it would escape), never running without it, so the nested caller decides.
 var errInRun = notHeld{fmt.Errorf("%w: this process is in a run's cgroup that proc made, and a run's cgroup made from it would be out of that run's limit, its kill and its peak; a run is not nested in a run here: %w", ErrRefused, errors.ErrUnsupported)}

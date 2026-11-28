@@ -93,11 +93,11 @@ type object struct {
 }
 
 // loadFiles is the files the search reads, a seam its rows run by on every system: resolve is a
-// path with every link in it resolved, the kernel's error for it as written, or errUntold for one
-// the kernel walks whose real path cannot be told, object the ELF file at a path, and head the
-// first maxLoader bytes of the regular file at a path.
+// path with every link in it resolved and whether what it names is a folder, the kernel's error for
+// it as written, or errUntold for one the kernel walks whose real path cannot be told, object the
+// ELF file at a path, and head the first maxLoader bytes of the regular file at a path.
 type loadFiles interface {
-	resolve(name string) (string, error)
+	resolve(name string) (real string, folder bool, err error)
 	object(name string) (object, error)
 	head(name string) ([]byte, error)
 }
@@ -437,7 +437,7 @@ func loadFolders(files loadFiles, arch, prog string, held []string) ([]string, e
 	if _, ok := loadersOf(arch); !ok {
 		return nil, nil
 	}
-	resolved, err := files.resolve(prog)
+	resolved, _, err := files.resolve(prog)
 	if err != nil {
 		return nil, noLoadf(prog, "it cannot be found: %v", err)
 	}
@@ -465,7 +465,7 @@ func loadFoldersOf(files loadFiles, arch, prog, resolved string, held []string) 
 	if o.unfollowed != 0 {
 		return nil, noLoadf(prog, "it names a library by %v, which the search does not follow", o.unfollowed)
 	}
-	loader, err := files.resolve(o.interp)
+	loader, _, err := files.resolve(o.interp)
 	if err != nil {
 		return nil, noLoadf(prog, "its loader %q cannot be found: %v", o.interp, err)
 	}
@@ -568,7 +568,7 @@ func (s *search) candidate(by *loaded, dir, name string) (found, resolved string
 	if !ok {
 		return "", "", nil
 	}
-	resolved, err = s.files.resolve(found)
+	resolved, _, err = s.files.resolve(found)
 	switch {
 	case err == nil:
 	case errors.Is(err, errUntold):
@@ -587,20 +587,18 @@ func (s *search) candidate(by *loaded, dir, name string) (found, resolved string
 }
 
 // walks says whether glibc's stat of the folder a library is looked for in, slashed as glibc writes
-// it with its closing slash, finds a folder there: glibc 2.38 and later stat it with that slash,
-// and up to 2.37 without, where a file is no folder and a folder at the kernel's length limit is
-// one. Where the loader's release cannot be told it is asked without, which finds a folder wherever
-// the stat with the slash does, and so fails closed; so does the root, which glibc up to 2.37 stats
-// as the empty name and passes over, and is asked as itself. One whose real path cannot be told is
-// there, since the kernel walks it.
+// it with its closing slash, finds a folder there (`S_ISDIR`): glibc 2.38 and later stat it with
+// that slash, and up to 2.37 without, where a file at the kernel's length limit is no folder and a
+// folder there is one. Where the loader's release cannot be told it is asked without, which finds a
+// folder wherever the stat with the slash does, and so fails closed; so does the root, which glibc
+// up to 2.37 stats as the empty name and passes over, and is asked as itself. One whose real path
+// cannot be told is there, since the kernel walks it, and whether it is a folder cannot be told.
 func (s *search) walks(slashed string) bool {
-	there := func(err error) bool { return err == nil || errors.Is(err, errUntold) }
-	_, withSlash := s.files.resolve(slashed)
-	if r := s.glibc(); r.told && (r.major > 2 || r.major == 2 && r.minor >= 38) {
-		return there(withSlash)
+	if r := s.glibc(); !r.told || r.major < 2 || r.major == 2 && r.minor < 38 {
+		slashed = cmp.Or(strings.TrimSuffix(slashed, "/"), "/")
 	}
-	_, bare := s.files.resolve(cmp.Or(strings.TrimSuffix(slashed, "/"), "/"))
-	return there(bare) && !errors.Is(withSlash, syscall.ENOTDIR)
+	_, folder, err := s.files.resolve(slashed)
+	return err == nil && folder || errors.Is(err, errUntold)
 }
 
 // glibc is the release of the loader, read from its file once.
@@ -654,13 +652,14 @@ func (s *search) hwcapsOf(by *loaded, dir, name string) error {
 	return nil
 }
 
-// unjudged is why the subfolder sub of a folder searched cannot be judged, "" for none: its real
-// path is beneath no built-in folder of the loader, or the kernel answers it with an error on which a
-// loader stops, or its real path cannot be told.
+// unjudged is why the subfolder sub of a folder searched cannot be judged, "" for none: it is a
+// folder whose real path is beneath no built-in folder of the loader, or the kernel answers it with
+// an error on which a loader stops, or its real path cannot be told, nor so whether it is a folder.
+// A file of its name glibc passes over, as its stat finds no folder (`!S_ISDIR`).
 func (s *search) unjudged(sub string) string {
-	real, err := s.files.resolve(sub)
+	real, folder, err := s.files.resolve(sub)
 	switch {
-	case err == nil && slices.ContainsFunc(s.rules.defaults, func(d string) bool { return beneathSlash(real, d) }):
+	case err == nil && (!folder || slices.ContainsFunc(s.rules.defaults, func(d string) bool { return beneathSlash(real, d) })):
 		return ""
 	case err == nil:
 		return fmt.Sprintf("its real path %q is beneath no built-in folder of the loader", real)
@@ -673,7 +672,8 @@ func (s *search) unjudged(sub string) string {
 // glibcRelease is the release a glibc loader's bytes name in the line its --version prints, "ld.so
 // (<package>) <kind> release version <major>.<minor>." or "<major>.<minor>.<more>.", and false for
 // bytes that name none, a release written another way, or two that differ. This field may decide:
-// it says only whether glibc's legacy subfolders are refused, and the loader it is read from is the
+// it says only whether glibc's legacy subfolders are judged, up to 2.36, and whether walks asks a
+// folder in a list with its closing slash, from 2.38, or without; the loader it is read from is the
 // file the program runs with.
 func glibcRelease(head []byte) (major, minor int, told bool) {
 	const mark = " release version "

@@ -54,8 +54,8 @@ func TestAProcessThatLeftTheTreeAndHoldsTheOutputEndsTheRunWithWhyEscaped(t *tes
 		// The escaped child still holds its pipes' ends, so it is alive, and the pid its own.
 		t.Cleanup(func() { _ = signalPid(syscall.Kill, pid, syscall.SIGKILL) })
 	}
-	if !endedWith(err, WhyEscaped) || res.Code != -1 {
-		t.Errorf("a run whose child left the tree: %v, Code %d, want Ended{%s} and Code -1", err, res.Code, WhyEscaped)
+	if !endedWith(err, WhyEscaped) || res.Code != -1 || res.End != EndNone || res.Signal != nil {
+		t.Errorf("a run whose child left the tree: %v, Code %d, End %q, Signal %v, want Ended{%s}, Code -1 and EndNone", err, res.Code, res.End, res.Signal, WhyEscaped)
 	}
 	if !res.Left {
 		t.Error("a run whose child left the tree: Left false, want true: the child outlived the kill")

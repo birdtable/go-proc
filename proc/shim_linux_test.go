@@ -393,8 +393,8 @@ func TestAContainedRunWhoseProgramForgesTheReadyByteIsRefused(t *testing.T) {
 	c.Timeout = 30 * time.Second
 	c.seam = &seams{host: cgroupHost{exe: exe}}
 	res, held, err := runContained(t, what, c)
-	if held && (!errors.Is(err, ErrRefused) || !errors.Is(err, errShimForged) || errors.Is(err, errNoContained) || errors.Is(err, errDeadline) || res.Code != -1 || len(res.Stdout) != 0) {
-		t.Errorf("%s: %v, Code %d, stdout %q, want ErrRefused with errShimForged, not errNoContained, not WhyDeadline, Code -1 and no output: the tree killed by the refusal, not by its Timeout", what, err, res.Code, res.Stdout)
+	if held && (!errors.Is(err, ErrRefused) || !errors.Is(err, errShimForged) || errors.Is(err, errNoContained) || errors.Is(err, errDeadline) || res.Code != -1 || res.End != EndNone || res.Signal != nil || len(res.Stdout) != 0) {
+		t.Errorf("%s: %v, Code %d, End %q, Signal %v, stdout %q, want ErrRefused with errShimForged, not errNoContained, not WhyDeadline, Code -1, EndNone and no output: the tree killed by the refusal, not by its Timeout", what, err, res.Code, res.End, res.Signal, res.Stdout)
 	}
 }
 

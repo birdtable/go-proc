@@ -33,8 +33,8 @@ func TestAProcessOutsideTheJobThatHoldsTheOutputEndsTheRunWithWhyEscaped(t *test
 	} else {
 		t.Errorf("the dup-out helper wrote %q and %q, want the handle it put in this process", res.Stdout, res.Stderr)
 	}
-	if !endedWith(err, WhyEscaped) || res.Code != -1 {
-		t.Errorf("a run whose output a process outside its job holds: %v, Code %d, want Ended{%s} and Code -1", err, res.Code, WhyEscaped)
+	if !endedWith(err, WhyEscaped) || res.Code != -1 || res.End != EndNone || res.Status != 0 {
+		t.Errorf("a run whose output a process outside its job holds: %v, Code %d, End %q, Status %#x, want Ended{%s}, Code -1 and EndNone", err, res.Code, res.End, res.Status, WhyEscaped)
 	}
 	if took >= drainWait {
 		t.Errorf("a run with a Drain of %v whose output a process outside its job holds returned %v after it began, want it ended by its Drain", c.Drain, took)

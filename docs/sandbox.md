@@ -52,7 +52,8 @@ too, which reads none of them; and on glibc, a folder it searches whose glibc-hw
 real path beneath no built-in folder of the loader, and, while the loader is glibc 2.36 or older, a
 folder it searches whose legacy subfolder, tls/ or a platform or hwcap subfolder glibc up to 2.36
 looks in first, has a real path beneath none, for every hwcap name glibc knows for the machine, not
-only its default mask's. The release is read from the line the loader's file
+only its default mask's. Such a subfolder refuses only when it is a folder, or whether it is one
+cannot be told, as glibc passes over a file of its name. The release is read from the line the loader's file
 prints with --version; where that names none, as before glibc 2.33, the subfolder alone refuses
 the folder, and the error says so. On glibc, a folder in the list that it cannot walk, a link
 loop, a path past the kernel's length limit or a file, is passed over for the next, as glibc passes
@@ -63,7 +64,8 @@ where 2.39 goes on, so for 2.39 that refusal fails closed. glibc 2.38 and later 
 folder is there with its closing slash, and up to 2.37 without, so a folder whose written path is
 4,095 bytes is there for 2.37 and passed over by 2.38; the search asks as the loader's release does,
 and as 2.37 does where the release cannot be told, which fails closed, as does the root, which
-glibc up to 2.37 passes over and the search asks as itself. On musl a path it
+glibc up to 2.37 passes over and the search asks as itself. A file at that length is passed over
+under every release, as glibc's stat finds no folder. On musl a path it
 looks for that the kernel answers with an error other than not found, permission denied or not a
 folder is refused, as musl stops the load there, and so is a name past the kernel's limit, which
 musl passes over, failing closed. musl names a found library by the folder as written, a slash and

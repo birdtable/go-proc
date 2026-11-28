@@ -596,8 +596,8 @@ func TestATreeThatPassesTreeMemoryIsKilledWithWhyLimit(t *testing.T) {
 		case why != nil:
 			refusedHere(t, what, res, err)
 			continue
-		case r.over && (!endedWith(err, WhyLimit) || res.Code != -1 || done):
-			t.Errorf("%s: %v, Code %d, stdout %q, stderr %q, want WhyLimit, Code -1 and no done", what, err, res.Code, res.Stdout, res.Stderr)
+		case r.over && (!endedWith(err, WhyLimit) || res.Code != -1 || res.End != EndNone || res.Signal != nil || done):
+			t.Errorf("%s: %v, Code %d, End %q, Signal %v, stdout %q, stderr %q, want WhyLimit, Code -1, EndNone and no done", what, err, res.Code, res.End, res.Signal, res.Stdout, res.Stderr)
 		case !r.over && (err != nil || res.Code != 0 || !done):
 			t.Errorf("%s: %v, Code %d, stdout %q, stderr %q, want exit 0 and done", what, err, res.Code, res.Stdout, res.Stderr)
 		}
