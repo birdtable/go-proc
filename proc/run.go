@@ -1110,10 +1110,10 @@ func (w *capped) bytes() []byte {
 }
 
 // endingOf is how the reaped leader ended, as endOf reads its state, and EndNone with no state to read
-// (unkillable, or a failed wait: ECHILD) or for a signal on a lost limit, the run's kill; an exit stays.
+// (unkillable, or a failed wait: ECHILD) or for SIGKILL on a lost limit, the run's kill; all else stays.
 func endingOf(cmd *process, unkillable bool, treeErr error) (EndKind, os.Signal, uint32) {
 	if !unkillable && cmd.ProcessState != nil {
-		if end, sig, status := endOf(cmd.ProcessState); end != EndSignal || !errors.Is(treeErr, errLimitLost) {
+		if end, sig, status := endOf(cmd.ProcessState); sig != os.Kill || !errors.Is(treeErr, errLimitLost) {
 			return end, sig, status
 		}
 	}
