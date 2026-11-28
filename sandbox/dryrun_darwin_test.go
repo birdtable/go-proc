@@ -137,7 +137,10 @@ func TestAMacDryRunItsBoundItsCapOrASignalEndedSaysSoWithItsFirstLine(t *testing
 // and saying so, and the program is never run. The same dry run with its
 // SIGCHLD taken is the control: it reaches the exec, without which a wait
 // that always refused would pass the refused row too. The runtime's SIGCHLD
-// is stood in for by a channel the test fills or leaves empty.
+// is stood in for by a channel the test fills or leaves empty. Only the
+// refused row is bounded short, for its wait to end soon; the control runs at
+// the dry run's own bound, since one of 100 ms ended its /usr/bin/true now and
+// then under load, before the exec it checks for.
 //
 // What it costs when this fails: a SIGCHLD from the dry run still pending at
 // the exec ends the sandbox with SIGILL before it sets the profile, as 12 of
@@ -147,11 +150,12 @@ func TestAMacDryRunWhoseExitNoSIGCHLDSaysIsErrNoBlockAndNothingIsRun(t *testing.
 	t.Parallel()
 	prog := []string{"/usr/bin/false"}
 	for _, taken := range []bool{false, true} {
-		chld := make(chan os.Signal, 1)
+		chld, bound := make(chan os.Signal, 1), 100*time.Millisecond
 		if taken {
 			chld <- syscall.SIGCHLD
+			bound = 0
 		}
-		k := &dryRunOf{bound: 100 * time.Millisecond, prog: []string{"/usr/bin/true"}}
+		k := &dryRunOf{bound: bound, prog: []string{"/usr/bin/true"}}
 		k.chld = chld
 		err := sandboxed(k, macosProfile, nil, prog[0], prog, nil)
 		switch {
