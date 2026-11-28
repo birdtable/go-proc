@@ -58,14 +58,15 @@ loop, a path past the kernel's length limit or a file, is passed over for the ne
 it over. In a folder that is there, a path the kernel answers with an error other than not found
 or permission denied, a link loop, a path past the kernel's length or a link through a file among
 them, is refused: glibc ends that folder list there, and on not a folder glibc up to 2.38 does too,
-where 2.39 goes on, so for 2.39 that refusal fails closed. On musl a path it looks for that the
-kernel answers with an error other than not found, permission denied or not a folder is refused,
-as musl stops the load there, and so is a name past the kernel's limit, which musl passes over,
-failing closed. musl names a found library by the folder as written, a slash and the name, and the
-search does too, so `$ORIGIN` in that library, and musl's 512-byte limit, read the same name. A
-library found where a loader's search order differs from the search's in some other way is not
-promised refused up front. Behind the block such a library loads only from the folders above, and
-from anywhere else fails at load, with nothing granted for it.
+where 2.39 goes on, so for 2.39 that refusal fails closed. The search passes over a folder whose
+written path is at the kernel's length limit, though, and does not refuse it. On musl a path it
+looks for that the kernel answers with an error other than not found, permission denied or not a
+folder is refused, as musl stops the load there, and so is a name past the kernel's limit, which
+musl passes over, failing closed. musl names a found library by the folder as written, a slash and
+the name, and the search does too, so `$ORIGIN` in that library, and musl's 512-byte limit, read
+the same name. A library found where a loader's search order differs from the search's in some
+other way is not promised refused up front. Behind the block such a library loads only from the
+folders above, and from anywhere else fails at load, with nothing granted for it.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
@@ -112,10 +113,13 @@ ids the exec runs with, must say yes, as the owner's bits decide for the owner, 
     /etc/ld-musl-<arch>.path, LD_LIBRARY_PATH or a glibc-hwcaps subfolder finds is not found, and
     the program is refused with ErrUsage, whatever folder is named. One that LD_PRELOAD or LD_AUDIT
     names, or that a program opens by dlopen once it runs, is not looked for: its folder is the
-    caller's to name. On macOS name the program by its
-    real path, since a link on the way to it outside the folders (/var, /tmp and /etc are links)
-    cannot be followed, and RunHolding refuses it with ErrUsage; a library outside dyld's shared
-    cache, and the folder of each program it starts, /bin for a shell, are the caller's to name.
+    caller's to name. Nor is a hwcap subfolder that glibc up to 2.36 looks in only once the caller
+    widens its hwcap mask, by LD_HWCAP_MASK or GLIBC_TUNABLES=glibc.cpu.hwcap_mask= in the
+    program's environment: the search judges those of the default mask alone. On macOS name the
+    program by its real path, since a link on the way to it outside the folders (/var, /tmp and
+    /etc are links) cannot be followed, and RunHolding refuses it with ErrUsage; a library outside
+    dyld's shared cache, and the folder of each program it starts, /bin for a shell, are the
+    caller's to name.
   - On macOS a universal file is taken for a program by its header, and its slices are not read.
     The kernel runs the slice it grades best for the Mac, and one that is not MH_EXECUTE it
     refuses with ENOEXEC, which execvp runs with /bin/sh, so a universal library passes Check and
