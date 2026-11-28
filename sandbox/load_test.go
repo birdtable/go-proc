@@ -605,7 +605,7 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		{
 			// glibc up to 2.38 ends the list on "not a folder" in a folder that is there; 2.39 goes on.
 			"glibc: a library name that is a link through a file, in a folder that is there", throughFile(glibcAMD),
-			`is looked for as "/opt/app/lib/libx.so", in a folder that is there, which the kernel answers with an error on which a loader stops looking: not a directory`,
+			`is looked for as "/opt/app/lib/libx.so", in a folder that is there, which the kernel answers with an error on which a loader stops looking: ` + syscall.ENOTDIR.Error(),
 		},
 		{
 			"musl: a folder in the list that is a link loop, which stops musl", passes(muslAMD, "/opt/app/loop").link("/opt/app/loop", "/opt/app/loop"),
