@@ -14,7 +14,7 @@ import (
 // EndSignal with Signal SIGTERM and no Status, and Code -1 and the wait's *exec.ExitError, as before.
 //
 // What it costs when this fails: a caller cannot tell a program another process ended from one
-// go-proc refused or ended, which all read Code -1 (go-proc-private#474).
+// go-proc refused or ended, which all read Code -1.
 func TestOnUnixAProgramEndedByASignalFromOutsideReadsEndSignalAndNamesIt(t *testing.T) {
 	t.Parallel()
 	res, err, sent := onPid(t, helperCmd(t, "pid-hold"), func(pid int) error {

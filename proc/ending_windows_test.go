@@ -15,7 +15,7 @@ import (
 // NTSTATUS error values, reads EndExited with no Status.
 //
 // What it costs when this fails: a caller cannot tell a program that crashed from one that exited
-// with a large code (go-proc-private#474).
+// with a large code.
 func TestOnWindowsAnNTStatusExitReadsEndAbnormalWithItsValue(t *testing.T) {
 	t.Parallel()
 	rows := []struct {
@@ -36,7 +36,7 @@ func TestOnWindowsAnNTStatusExitReadsEndAbnormalWithItsValue(t *testing.T) {
 // no error, as End's doc says: Windows keeps no mark of who chose the code.
 //
 // What it costs when this fails: End claims to tell apart what no library can, and the doc's limit is
-// wrong (go-proc-private#474).
+// wrong.
 func TestOnWindowsTerminateProcessWithCodeOneReadsAsAnExitWithCodeOne(t *testing.T) {
 	t.Parallel()
 	res, err, ended := onPid(t, helperCmd(t, "pid-hold"), func(pid int) error {

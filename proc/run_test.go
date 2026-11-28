@@ -777,7 +777,7 @@ func TestEachWayARunIsEndedIsAnEnded(t *testing.T) {
 // program's own end.
 //
 // What it costs when this fails: a caller reads a run go-proc ended, or never started, as the
-// program's own end, or a program's exit as something else (go-proc-private#474).
+// program's own end, or a program's exit as something else.
 func TestEndIsTheProgramsOwnExitAndNoneForARunGoProcEndedOrRefused(t *testing.T) {
 	t.Parallel()
 	for _, code := range []int{0, 3} {
