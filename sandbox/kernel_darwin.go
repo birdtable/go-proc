@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/signal"
 	"strconv"
 	"syscall"
 	"testing"
@@ -16,10 +17,12 @@ import (
 
 // darwinKernel is the kernel the macOS block asks, through package syscall.
 // bound is 0 but in a test of the package, which shortens the dry run's
-// timeout to run its end by the bound; dryRun takes it only under
-// testing.Testing().
+// timeout to run its end by the bound; chld is nil but in a test, which
+// stands in for the runtime's SIGCHLD to run a dry run whose exit is never
+// signalled. dryRun takes each only under testing.Testing().
 type darwinKernel struct {
 	bound time.Duration
+	chld  <-chan os.Signal
 }
 
 // closeAtExec marks each descriptor /dev/fd names from fd up to close at exec, read by its names alone: os.ReadDir stats each
@@ -84,12 +87,31 @@ const (
 // was ended, by its bound, its output cap or a signal, is code -1 with what it
 // wrote, not an error: proc gives each as one, and the error is kept for a
 // dry run that could not be run.
+//
+// The dry run's exit sends this process SIGCHLD, and the exec follows its wait. A SIGCHLD still
+// pending at the exec ends the new image at its first instruction with SIGILL, as a dry run
+// under a load of busy threads showed in 12 of 30,000 starts, so a dry run that ran returns only
+// once the runtime has taken a SIGCHLD sent since it began, and is errUnsignalled when none
+// comes within the dry run's timeout.
 func (k darwinKernel) dryRun(path string, args []string) (int, []byte, error) {
-	timeout := dryRunTimeout
+	timeout, chld := dryRunTimeout, make(chan os.Signal, 1)
+	signal.Notify(chld, syscall.SIGCHLD)
+	defer signal.Stop(chld)
+	taken := (<-chan os.Signal)(chld)
 	if testing.Testing() && k.bound > 0 {
 		timeout = k.bound
 	}
+	if testing.Testing() && k.chld != nil {
+		taken = k.chld
+	}
 	r, err := proc.Run(context.Background(), proc.Cmd{Path: path, Args: args, Env: []string{}, Timeout: timeout, MaxOutput: dryRunOutput, Drain: timeout}) //nolint:forbidigo // go.concurrency.1: Run takes no context, since its exec ends this program, and the dry run is bounded by its own Timeout
+	if err == nil || ended(err) {
+		select {
+		case <-taken:
+		case <-time.After(timeout):
+			return -1, r.Stderr, errUnsignalled
+		}
+	}
 	if ended(err) {
 		return -1, r.Stderr, nil
 	}

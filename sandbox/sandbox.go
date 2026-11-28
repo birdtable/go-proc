@@ -520,9 +520,14 @@ type macKernel interface {
 	streamKernel
 	// dryRun runs path with args as a child, with no environment and no stdin, waits for it, and
 	// says its exit code, -1 for one a signal, the bound or the output cap ended, and the first of
-	// what it wrote to stderr; err is a child that could not be run, never one that ran.
+	// what it wrote to stderr; err is a child that could not be run, never one that ran, but for
+	// errUnsignalled.
 	dryRun(path string, args []string) (code int, stderr []byte, err error)
 }
+
+// errUnsignalled is a dry run that ran and whose exit no SIGCHLD the runtime took said within
+// its bound: the signal may yet be pending, and one pending at the exec ends the sandbox.
+var errUnsignalled = errors.New("no SIGCHLD for its exit was taken within the dry run's bound, and one pending at the exec would end the sandbox before the program")
 
 // errStdioSocket is a stdin, stdout or stderr that is a socket of a family that is not AF_UNIX.
 var errStdioSocket = errors.New("a standard stream of the blocked program is a socket of a family that is not AF_UNIX")
@@ -855,6 +860,8 @@ func sandboxed(k macKernel, profile string, params []string, prog string, argv, 
 	head := slices.Concat([]string{sandboxProgram}, params, []string{"-p", profile})
 	code, said, err := k.dryRun(sandboxProgram, slices.Concat(head[1:], []string{macNoop}))
 	switch {
+	case errors.Is(err, errUnsignalled):
+		return noBlock{fmt.Errorf("%s ran its dry run of the profile, but %w, so no block is set and %s is not run", sandboxProgram, err, prog)}
 	case err != nil:
 		return noBlock{fmt.Errorf("%s could not be started for its dry run of the profile, so no block is set and %s is not run: %w", sandboxProgram, prog, err)}
 	case code != 0:
