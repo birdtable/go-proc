@@ -93,10 +93,12 @@ Know these before you rely on it.
   an audit or filter tag; under glibc when a folder the search looks in has a `glibc-hwcaps`
   subfolder beneath no built-in folder, or, up to glibc 2.36 or where the loader's release cannot
   be told, a `tls/`, platform or hwcap subfolder beneath none; and when the kernel answers a path
-  looked for with an error such as a link loop, under glibc in a folder that is there. glibc passes
-  over a folder it cannot walk, and so does the search. A folder whose written path is 4,095 bytes,
+  looked for with an error such as a link loop, under glibc in a folder that is there. Each such
+  subfolder refuses only when it is a folder, or whether it is one cannot be told: glibc passes over
+  a file of its name. glibc passes over a folder it cannot walk, and so does the search. A folder whose written path is 4,095 bytes,
   at the kernel's length limit, is there for glibc up to 2.37 and passed over from 2.38, and the
-  search asks as the loader's release does, and as 2.37 does where the release cannot be told. A library found where a loader's search
+  search asks as the loader's release does, and as 2.37 does where the release cannot be told; a
+  file there is passed over under every release. A library found where a loader's search
   order differs from the search's some other way is not promised refused before the run. Behind
   the block such a library loads only from the folders the block grants, and from anywhere else
   fails at load.

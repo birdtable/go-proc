@@ -92,6 +92,10 @@ var (
 	errLimit = Ended{WhyLimit}
 )
 
+// errLimitLost ends a Contained run whose cgroup lost its limit while the tree ran (as memory leaves
+// it at the tree's write of -memory to its parent's cgroup.subtree_control), never WhyLimit: Linux's.
+var errLimitLost = errors.New("proc: the run's cgroup lost the TreeMemory limit the run set, and the run killed its tree")
+
 // ownCut is a cause Run gives its own context: its Timeout, its cap or its limit. A caller's cause
 // is never one, even one that errors.Is an Ended, so a run reads only its own cuts as its own.
 type ownCut struct{ Ended }
@@ -386,11 +390,13 @@ type EndKind string
 
 // The kinds of a Result.End, a closed list.
 const (
-	// EndNone is a run refused, or ended by go-proc (its Timeout, MaxOutput, ctx, a limit, or
-	// WhyUnkillable or WhyEscaped), whose error says which, or a run whose wait for its program failed.
+	// EndNone is a run refused, or ended by go-proc (its Timeout, MaxOutput, ctx, a limit or its loss,
+	// or WhyUnkillable or WhyEscaped), whose error says which, or a run whose wait for its program failed.
 	EndNone EndKind = ""
 	// EndExited is the program's exit, with Code. On Windows so is an end by TerminateProcess with a
 	// code below 0xC0000000: Windows keeps no mark of who chose a code, so no library tells them apart.
+	// So is an unhandled exception of warning severity, below 0xC0000000, such as STATUS_BREAKPOINT
+	// (0x80000003) or STATUS_GUARD_PAGE_VIOLATION (0x80000001): it reads as an exit with that code.
 	EndExited EndKind = "exited"
 	// EndSignal is an end by a signal go-proc did not send, with Signal naming it (Unix).
 	EndSignal EndKind = "signal"
@@ -824,7 +830,7 @@ func Run(ctx context.Context, c Cmd) (Result, error) {
 	readPeak := c.ReadPeak && !unkillable
 	treeErr := tree.end(readPeak)
 	res := Result{Stdout: out.stdout.bytes(), Stderr: out.stderr.bytes(), Code: exitCode(cmd, unkillable)}
-	res.End, res.Signal, res.Status = endingOf(cmd, unkillable)
+	res.End, res.Signal, res.Status = endingOf(cmd, unkillable, treeErr)
 	why := endings(ctx, out, g, escaped && !unkillable)
 	if len(why) > 0 {
 		res.Code, res.End, res.Signal, res.Status = -1, EndNone, nil, 0
@@ -1103,13 +1109,15 @@ func (w *capped) bytes() []byte {
 	return w.buf.Bytes()
 }
 
-// endingOf is how the reaped leader ended, as endOf reads its state, and EndNone with no state to read:
-// an unkillable run's leader, as exitCode says, or one whose wait failed, as on ECHILD.
-func endingOf(cmd *process, unkillable bool) (EndKind, os.Signal, uint32) {
-	if unkillable || cmd.ProcessState == nil {
-		return EndNone, nil, 0
+// endingOf is how the reaped leader ended, as endOf reads its state, and EndNone with no state to read
+// (unkillable, or a failed wait: ECHILD) or for SIGKILL on a lost limit, the run's kill; all else stays.
+func endingOf(cmd *process, unkillable bool, treeErr error) (EndKind, os.Signal, uint32) {
+	if !unkillable && cmd.ProcessState != nil {
+		if end, sig, status := endOf(cmd.ProcessState); sig != os.Kill || !errors.Is(treeErr, errLimitLost) {
+			return end, sig, status
+		}
 	}
-	return endOf(cmd.ProcessState)
+	return EndNone, nil, 0
 }
 
 // exitCode is the reaped leader's exit code. An unkillable run's leader is not reaped by Run: a

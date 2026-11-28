@@ -188,14 +188,15 @@ func TestAContainedRunFromTheCgroupMountItselfIsEnteredIntoTheRunsRoot(t *testin
 // of its own, below a delegated cgroup of its own, so the run's parent is its own and the write takes
 // the memory controller from no other run's cgroup: not another row's, and not those of the other
 // binary of the release tier, which runs beside this one under the same delegated parent;
-// it moves this process back and removes both cgroups after. A tree names no such file now
+// it moves this process back and removes both cgroups after. The run reads EndNone, with no Signal
+// and no Status: the run's own kill is no end of the program's. A tree names no such file now
 // (TestAContainedTreeCannotStopItsCallerThenLiftTreeMemory), so the write is made from
 // outside, as another process of the caller's user may make it. Where no cgroup is delegated, or
 // cgroup v2 has no nsdelegate, the run is refused and starts nothing.
 //
 // What it costs when this fails: the run's cgroup loses the memory controller, with no limit left on
-// it, and its tree runs on, or ends as if its program exited, or as WhyLimit; the caller was told it
-// could not leave its limit.
+// it, and its tree runs on, or ends as if its program exited, or as WhyLimit, or reads as ended by a
+// SIGKILL go-proc did not send; the caller was told it could not leave its limit.
 func TestAContainedRunWhoseCgroupLosesMemoryIsKilledWithErrLimitLost(t *testing.T) {
 	// serial: this process moves to a cgroup of its own, as every row of the binary would
 	const what = "a Contained helper held to 64 MiB whose parent's cgroup.subtree_control this process wrote -memory to"
@@ -257,8 +258,10 @@ func TestAContainedRunWhoseCgroupLosesMemoryIsKilledWithErrLimitLost(t *testing.
 		t.Errorf("%s: writing -memory to %s: %v", what, control, err)
 	}
 	end = <-done
-	if !errors.Is(end.err, errLimitLost) || endedWith(end.err, WhyLimit) || errors.Is(end.err, errDeadline) || end.res.Code != -1 {
-		t.Errorf("%s: %v, Code %d, stdout %q, stderr %q, want errLimitLost, no WhyLimit and no WhyDeadline, and Code -1", what, end.err, end.res.Code, end.res.Stdout, end.res.Stderr)
+	if !errors.Is(end.err, errLimitLost) || endedWith(end.err, WhyLimit) || errors.Is(end.err, errDeadline) || end.res.Code != -1 ||
+		end.res.End != EndNone || end.res.Signal != nil || end.res.Status != 0 {
+		t.Errorf("%s: %v, Code %d, End %q, Signal %v, Status %#x, stdout %q, stderr %q, want errLimitLost, no WhyLimit and no WhyDeadline, Code -1 and EndNone alone",
+			what, end.err, end.res.Code, end.res.End, end.res.Signal, end.res.Status, end.res.Stdout, end.res.Stderr)
 	}
 	runGone(t, what, cgroupLines(end.res.Stdout)["run"])
 }

@@ -699,8 +699,8 @@ func TestAProgramThatWritesPastTheCapIsEndedWithWhyCap(t *testing.T) {
 		c := helperCmd(t, "write", r.n, r.m, "hold")
 		c.MaxOutput = maxOutput
 		res, err := Run(t.Context(), c)
-		if !endedWith(err, WhyCap) || res.Code != -1 {
-			t.Errorf("%s and %s bytes over a cap of %d: %v, Code %d, want Ended{%s} and Code -1", r.n, r.m, maxOutput, err, res.Code, WhyCap)
+		if !endedWith(err, WhyCap) || res.Code != -1 || res.End != EndNone || res.Signal != nil {
+			t.Errorf("%s and %s bytes over a cap of %d: %v, Code %d, End %q, Signal %v, want Ended{%s}, Code -1 and EndNone", r.n, r.m, maxOutput, err, res.Code, res.End, res.Signal, WhyCap)
 		}
 		if got := len(res.Stdout) + len(res.Stderr); got != maxOutput {
 			t.Errorf("%s and %s bytes over a cap of %d: kept %d and %d, want the cap's worth of the one stream", r.n, r.m, maxOutput, len(res.Stdout), len(res.Stderr))
@@ -751,8 +751,8 @@ func TestEachWayARunIsEndedIsAnEnded(t *testing.T) {
 		c.Stdin = cancelling{cancel, cause}
 		res, err = Run(parent, c)
 		cancel(nil)
-		if !endedWith(err, WhyCancelled) || !errors.Is(err, cause) || res.Code != -1 {
-			t.Errorf("a run whose parent ended by %v: %v, Code %d, want Ended{%s} and the parent's cause", cause, err, res.Code, WhyCancelled)
+		if !endedWith(err, WhyCancelled) || !errors.Is(err, cause) || res.Code != -1 || res.End != EndNone || res.Signal != nil {
+			t.Errorf("a run whose parent ended by %v: %v, Code %d, End %q, Signal %v, want Ended{%s}, the parent's cause and EndNone", cause, err, res.Code, res.End, res.Signal, WhyCancelled)
 		}
 	}
 	res, err = Run(t.Context(), helperCmd(t, "write", "0", "0", "exit"))

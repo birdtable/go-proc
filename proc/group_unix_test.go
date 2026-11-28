@@ -369,6 +369,9 @@ func TestAnUnkillableRunsCodeIsMinusOneAndTheLateReapIsNotRead(t *testing.T) {
 	if code := exitCode(cmd, true); code != -1 {
 		t.Errorf("an unkillable run's Code is %d, want -1", code)
 	}
+	if end, sig, status := endingOf(cmd, true, nil); end != EndNone || sig != nil || status != 0 {
+		t.Errorf("an unkillable run's End is %q, Signal %v, Status %#x, want EndNone alone", end, sig, status)
+	}
 
 	own, reaps, _ := started(t, t.Context(), "/bin/sh", "-c", "exit 3")
 	var waited error
