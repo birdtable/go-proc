@@ -49,16 +49,23 @@ The search imitates two loaders' search orders, so it refuses up front what it f
 a loader can reach a file. Refused up front as well, with ErrUsage: a program or library naming a
 library by an audit or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY), under musl
 too, which reads none of them; and on glibc, a folder it searches whose glibc-hwcaps subfolder has a
-real path beneath no built-in folder of the loader. It also refuses a path it looks for that the
-kernel answers with an error other than not found, permission denied or not a folder, such as a link
-loop or a path past the kernel's length: glibc ends a folder list when the folder is there and the
-file in it answers such an error, and passes over a folder it cannot walk, and the search refuses
-both. musl names a found library by the folder as written, a slash and the name, and the search does
-too, so `$ORIGIN` in that library, and musl's 512-byte limit, read the same name. A library found
-where a loader's search order differs from the search's in some other way, such as in the tls/,
-platform and hwcap subfolders that glibc up to 2.36 looks in before a folder, is not promised
-refused up front. Behind the block such a library loads only from the folders above, and from
-anywhere else fails at load, with nothing granted for it.
+real path beneath no built-in folder of the loader, and, while the loader is glibc 2.36 or older, a
+folder it searches whose legacy subfolder, tls/ or a platform or hwcap subfolder glibc up to 2.36
+looks in first, has a real path beneath none. The release is read from the line the loader's file
+prints with --version; where that names none, as before glibc 2.33, the subfolder alone refuses
+the folder, and the error says so. On glibc, a folder in the list that it cannot walk, a link
+loop, a path past the kernel's length limit or a file, is passed over for the next, as glibc passes
+it over. In a folder that is there, a path the kernel answers with an error other than not found
+or permission denied, a link loop, a path past the kernel's length or a link through a file among
+them, is refused: glibc ends that folder list there, and on not a folder glibc up to 2.38 does too,
+where 2.39 goes on, so for 2.39 that refusal fails closed. On musl a path it looks for that the
+kernel answers with an error other than not found, permission denied or not a folder is refused,
+as musl stops the load there, and so is a name past the kernel's limit, which musl passes over,
+failing closed. musl names a found library by the folder as written, a slash and the name, and the
+search does too, so `$ORIGIN` in that library, and musl's 512-byte limit, read the same name. A
+library found where a loader's search order differs from the search's in some other way is not
+promised refused up front. Behind the block such a library loads only from the folders above, and
+from anywhere else fails at load, with nothing granted for it.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies

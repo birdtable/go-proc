@@ -3,6 +3,7 @@ package sandbox
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -40,6 +41,20 @@ func (osFiles) object(name string) (o object, err error) {
 		return object{}, errors.Join(errors.New("it is not a regular file"), err)
 	}
 	return readObject(f, uint64(os.Getpagesize())) //nolint:gosec // G115: a page size is above 0
+}
+
+// head is the first maxLoader bytes of the file at name, opened without waiting, as object opens
+// it, and read only when it is a regular file.
+func (osFiles) head(name string) (b []byte, err error) {
+	f, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: the loader the program names, by its real path, is what this reads
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, errors.Join(errors.New("it is not a regular file"), err)
+	}
+	return io.ReadAll(io.LimitReader(f, maxLoader))
 }
 
 // loadHere is the folders prog, whose real file is real, needs to load on this system: its

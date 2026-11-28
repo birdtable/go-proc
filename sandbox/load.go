@@ -48,20 +48,26 @@ import (
 // What the search does not follow it refuses: any file that names a library by DT_AUDIT,
 // DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY, though glibc reads DT_AUDIT and DT_DEPAUDIT from the
 // program only and musl reads none of the four; on glibc, a folder searched whose glibc-hwcaps
-// subfolder is beneath no built-in folder of the loader;
-// and a path the loader opens that the kernel answers with an error on which a loader stops, not
-// "no such file", "permission denied" or "not a folder": musl stops the whole load there, glibc
-// that file's list, and a link loop and a path past the kernel's length limit are such errors.
+// subfolder is beneath no built-in folder of the loader, and, while the loader is glibc 2.36 or
+// older or its release cannot be told, one whose legacy subfolder, tls/ or a platform or hwcap
+// subfolder, is beneath none; and a path the loader opens that the kernel answers with an error but
+// "no such file" or "permission denied". musl stops the whole load on any such error but "not a
+// folder" and a name too long, and the search refuses a name too long too. glibc passes over a folder
+// it cannot walk, by its stat of the folder, as the search does, and ends that file's list in a folder
+// that is there, on "not a folder" too up to 2.38, and the search refuses it. A link loop and a path
+// past the kernel's length limit are such errors.
 //
 // The bounds of one search: maxLibraries files, maxLoadDepth files from the program to a library,
-// maxPathList folders in one DT_RPATH or DT_RUNPATH, maxInterp bytes of a loader's name and
-// maxDynamic bytes of a dynamic segment or of its strings.
+// maxPathList folders in one DT_RPATH or DT_RUNPATH, maxInterp bytes of a loader's name,
+// maxDynamic bytes of a dynamic segment or of its strings, and maxLoader bytes of a loader read for
+// its release.
 const (
 	maxLibraries = 1024
 	maxLoadDepth = 64
 	maxPathList  = 64
 	maxInterp    = 4096
 	maxDynamic   = 64 << 20
+	maxLoader    = 16 << 20
 )
 
 // muslPath is the bytes of the buffer musl's loader writes a searched folder, a slash and the
@@ -86,10 +92,12 @@ type object struct {
 
 // loadFiles is the files the search reads, a seam its rows run by on every system: resolve is a
 // path with every link in it resolved, the kernel's error for it as written, or errUntold for one
-// the kernel walks whose real path cannot be told, and object the ELF file at a path.
+// the kernel walks whose real path cannot be told, object the ELF file at a path, and head the
+// first maxLoader bytes of the regular file at a path.
 type loadFiles interface {
 	resolve(name string) (string, error)
 	object(name string) (object, error)
+	head(name string) ([]byte, error)
 }
 
 // unfollowedTags is the tags by which a file names a library to load that the search does not
@@ -299,27 +307,35 @@ func mapped(loads []*elf.Prog, addr, size uint64) ([]byte, error) {
 }
 
 // loaderNames is, for one architecture, the loader a glibc program names and the one a musl
-// program names, the library folder of Debian's multiarch layout and glibc's $PLATFORM.
-type loaderNames struct{ glibc, musl, multiarch, platform string }
+// program names, the library folder of Debian's multiarch layout, glibc's $PLATFORM, and the
+// legacy subfolders glibc up to 2.36 looks in first, each the first part of one: tls, the platforms
+// the kernel and glibc's own CPU check name, and the hwcap names glibc counts.
+type loaderNames struct {
+	glibc, musl, multiarch, platform string
+	legacy                           []string
+}
 
 // loadersOf is the loaders the search knows for the architecture arch, and false for one it holds
 // none for, where the block holds no filter either.
 func loadersOf(arch string) (loaderNames, bool) {
 	switch arch {
 	case "amd64":
-		return loaderNames{"/lib64/ld-linux-x86-64.so.2", "/lib/ld-musl-x86_64.so.1", "lib/x86_64-linux-gnu", "x86_64"}, true
+		return loaderNames{"/lib64/ld-linux-x86-64.so.2", "/lib/ld-musl-x86_64.so.1", "lib/x86_64-linux-gnu", "x86_64",
+			[]string{"tls", "x86_64", "haswell", "xeon_phi", "avx512_1"}}, true
 	case "arm64":
-		return loaderNames{"/lib/ld-linux-aarch64.so.1", "/lib/ld-musl-aarch64.so.1", "lib/aarch64-linux-gnu", "aarch64"}, true
+		return loaderNames{"/lib/ld-linux-aarch64.so.1", "/lib/ld-musl-aarch64.so.1", "lib/aarch64-linux-gnu", "aarch64",
+			[]string{"tls", "aarch64", "atomics"}}, true
 	}
 	return loaderNames{}, false
 }
 
 // loaderRules is one loader's search: whether it is musl's, its built-in folders, which it looks
-// in last, and what each $NAME of a list but $ORIGIN stands for.
+// in last, what each $NAME of a list but $ORIGIN stands for, and glibc's legacy subfolders.
 type loaderRules struct {
 	musl     bool
 	defaults []string
 	tokens   map[string]string
+	legacy   []string
 }
 
 // rules is the search of the loader a program names as interp, whose real folder is dir, and false
@@ -339,7 +355,7 @@ func (l loaderNames) rules(interp, dir string) (loaderRules, bool) {
 		if lib == l.multiarch {
 			defaults = append(defaults, "/lib", "/usr/lib")
 		}
-		return loaderRules{defaults: defaults, tokens: map[string]string{"LIB": lib, "PLATFORM": l.platform}}, true
+		return loaderRules{defaults: defaults, tokens: map[string]string{"LIB": lib, "PLATFORM": l.platform}, legacy: l.legacy}, true
 	}
 	return loaderRules{}, false
 }
@@ -374,18 +390,28 @@ type loaded struct {
 // search is one program's search: the files it reads, the program as the caller named it, the
 // caller's folders, by their real paths, its loader's rules, the program itself, each name a file is
 // loaded by already (a needed name or a soname), each real path a file is loaded from already,
-// each folder whose glibc-hwcaps subfolder was judged, and the folders answered so far. Names and real paths are kept apart, so no name, a soname that is an
-// absolute path among them, makes a real path look loaded and passes its file over unjudged.
+// each folder whose glibc-hwcaps and legacy subfolders were judged, and the folders answered so far. Names and real paths are kept apart, so no name, a soname that is an
+// absolute path among them, makes a real path look loaded and passes its file over unjudged. The
+// loader is its real file, and release the glibc release its bytes name, once read.
 type search struct {
-	files  loadFiles
-	prog   string
-	held   []string
-	rules  loaderRules
-	main   *loaded
-	names  map[string]bool
-	reals  map[string]bool
-	hwcaps map[string]bool
-	dirs   []string
+	files   loadFiles
+	prog    string
+	held    []string
+	rules   loaderRules
+	main    *loaded
+	names   map[string]bool
+	reals   map[string]bool
+	hwcaps  map[string]bool
+	dirs    []string
+	loader  string
+	release *release
+}
+
+// release is a glibc release, as glibcRelease reads it from a loader's bytes: told is false for
+// bytes that name none, or more than one.
+type release struct {
+	major, minor int
+	told         bool
 }
 
 // loadFolders is the folders the program prog, an absolute path, needs to load on Linux for the
@@ -442,7 +468,7 @@ func loadFoldersOf(files loadFiles, arch, prog, resolved string, held []string) 
 		return nil, noLoadf(prog, "its loader %q, the file %q, is one netblock does not know", o.interp, loader)
 	}
 	s := &search{files: files, prog: prog, held: held, rules: rules, main: &loaded{object: o, name: resolved},
-		names: map[string]bool{path.Base(o.interp): true}, reals: map[string]bool{loader: true}, hwcaps: map[string]bool{}, dirs: []string{path.Dir(loader)}}
+		names: map[string]bool{path.Base(o.interp): true}, reals: map[string]bool{loader: true}, hwcaps: map[string]bool{}, dirs: []string{path.Dir(loader)}, loader: loader}
 	return s.run()
 }
 
@@ -522,9 +548,10 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 
 // candidate is the path the loader opens for name in the folder dir and its real path: no real
 // path for a file the loader passes over, unopened or one the kernel will not walk to with an
-// error both loaders pass over, and ErrUsage for a file it opens whose real path cannot be told,
+// error the loader passes over, and ErrUsage for a file it opens whose real path cannot be told,
 // for a path the kernel answers with an error on which a loader stops, and, past those, for a folder
-// whose glibc-hwcaps subfolder hwcapsOf refuses.
+// whose glibc-hwcaps or legacy subfolder hwcapsOf refuses. glibc, on an error but "no such file" and
+// "permission denied", passes over a folder it cannot walk, and looks in none of its subfolders.
 func (s *search) candidate(by *loaded, dir, name string) (found, resolved string, err error) {
 	found, ok := s.joined(dir, name)
 	if !ok {
@@ -532,14 +559,28 @@ func (s *search) candidate(by *loaded, dir, name string) (found, resolved string
 	}
 	resolved, err = s.files.resolve(found)
 	switch {
+	case err == nil:
 	case errors.Is(err, errUntold):
 		return "", "", noLoadf(s.prog, "the library %q, which %q needs, is the file %q, and %v", name, by.name, found, err)
-	case err != nil && !passedOver(err):
+	case !s.rules.musl && dir != "" && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.EACCES):
+		if !s.walks(found[:len(found)-len(name)]) {
+			return "", "", nil
+		}
+		return "", "", noLoadf(s.prog, "the library %q, which %q needs, is looked for as %q, in a folder that is there, which the kernel answers with an error on which a loader stops looking: %v", name, by.name, found, err)
+	case !passedOver(err):
 		return "", "", noLoadf(s.prog, "the library %q, which %q needs, is looked for as %q, which the kernel answers with an error on which a loader stops looking: %v", name, by.name, found, err)
-	case err != nil:
+	default:
 		found, resolved = "", ""
 	}
 	return found, resolved, s.hwcapsOf(by, dir, name)
+}
+
+// walks says whether glibc's stat of folder, a searched folder as glibc writes it with a closing
+// slash, finds a folder there: one whose real path cannot be told is there, since the kernel walks
+// it.
+func (s *search) walks(folder string) bool {
+	_, err := s.files.resolve(folder)
+	return err == nil || errors.Is(err, errUntold)
 }
 
 // passedOver says whether err, the kernel's answer for a path a loader opens, is one on which both
@@ -551,24 +592,89 @@ func passedOver(err error) bool {
 // hwcapsOf is ErrUsage, on glibc, for a folder dir looked in for name, which by needs, whose
 // glibc-hwcaps subfolder is there and beneath no built-in folder of the loader, by its real path,
 // or the kernel answers with an error on which a loader stops: glibc looks in it first, in an
-// order the machine's levels set, which the search does not follow. Each folder is judged once.
+// order the machine's levels set, which the search does not follow. So is one whose legacy
+// subfolder is, while the loader's release, read once, is 2.36 or older or cannot be told: glibc up
+// to 2.36 looks in those first, in an order the machine's hardware sets. Each folder is judged once.
 func (s *search) hwcapsOf(by *loaded, dir, name string) error {
 	if s.rules.musl || dir == "" || s.hwcaps[dir] {
 		return nil
 	}
 	s.hwcaps[dir] = true
 	sub := strings.TrimRight(dir, "/") + "/glibc-hwcaps"
+	if why := s.unjudged(sub); why != "" {
+		return noLoadf(s.prog, "the library %q, which %q needs, is looked for in %q, where glibc first looks in %q by the machine's levels, which the search does not follow, and %s", name, by.name, dir, sub, why)
+	}
+	for _, legacy := range s.rules.legacy {
+		sub := strings.TrimRight(dir, "/") + "/" + legacy
+		why := s.unjudged(sub)
+		if why == "" {
+			continue
+		}
+		if s.release == nil {
+			head, err := s.files.head(s.loader)
+			s.release = &release{}
+			if err == nil {
+				s.release.major, s.release.minor, s.release.told = glibcRelease(head)
+			}
+		}
+		r := s.release
+		switch {
+		case r.told && (r.major > 2 || r.major == 2 && r.minor >= 37):
+			return nil
+		case r.told:
+			return noLoadf(s.prog, "the library %q, which %q needs, is looked for in %q, where glibc %d.%d first looks in its legacy subfolder %q by the machine's hardware, which the search does not follow, and %s", name, by.name, dir, r.major, r.minor, sub, why)
+		}
+		return noLoadf(s.prog, "the library %q, which %q needs, is looked for in %q, where glibc up to 2.36 first looks in its legacy subfolder %q by the machine's hardware, which the search does not follow, and %s; the release of the loader %q cannot be told from its file, so the subfolder alone refuses it", name, by.name, dir, sub, why, s.loader)
+	}
+	return nil
+}
+
+// unjudged is why the subfolder sub of a folder searched cannot be judged, "" for none: its real
+// path is beneath no built-in folder of the loader, or the kernel answers it with an error on which a
+// loader stops, or its real path cannot be told.
+func (s *search) unjudged(sub string) string {
 	real, err := s.files.resolve(sub)
-	why := fmt.Sprintf("its real path %q is beneath no built-in folder of the loader", real)
 	switch {
 	case err == nil && slices.ContainsFunc(s.rules.defaults, func(d string) bool { return beneathSlash(real, d) }):
-		return nil
-	case err != nil && !errors.Is(err, errUntold) && passedOver(err):
-		return nil
-	case err != nil:
-		why = err.Error()
+		return ""
+	case err == nil:
+		return fmt.Sprintf("its real path %q is beneath no built-in folder of the loader", real)
+	case !errors.Is(err, errUntold) && passedOver(err):
+		return ""
 	}
-	return noLoadf(s.prog, "the library %q, which %q needs, is looked for in %q, where glibc first looks in %q by the machine's levels, which the search does not follow, and %s", name, by.name, dir, sub, why)
+	return err.Error()
+}
+
+// glibcRelease is the release a glibc loader's bytes name in the line its --version prints, "ld.so
+// (<package>) <kind> release version <major>.<minor>." or "<major>.<minor>.<more>.", and false for
+// bytes that name none, a release written another way, or two that differ. This field may decide:
+// it says only whether glibc's legacy subfolders are refused, and the loader it is read from is the
+// file the program runs with.
+func glibcRelease(head []byte) (major, minor int, told bool) {
+	const mark = " release version "
+	for rest := head; ; {
+		i := bytes.Index(rest, []byte(mark))
+		if i < 0 {
+			return major, minor, told
+		}
+		rest = rest[i+len(mark):]
+		ma, after, ok1 := leadingNumber(rest)
+		ok2 := ok1 && len(after) > 0 && after[0] == '.'
+		mi, after, ok3 := leadingNumber(after[min(len(after), 1):])
+		if !ok2 || !ok3 || len(after) == 0 || after[0] != '.' || told && (ma != major || mi != minor) {
+			return 0, 0, false
+		}
+		major, minor, told = ma, mi, true
+	}
+}
+
+// leadingNumber is the number of one to four digits b starts with, and the bytes after it.
+func leadingNumber(b []byte) (int, []byte, bool) {
+	n, i := 0, 0
+	for ; i < len(b) && i < 5 && b[i] >= '0' && b[i] <= '9'; i++ {
+		n = n*10 + int(b[i]-'0')
+	}
+	return n, b[i:], i > 0 && i < 5
 }
 
 // joined is the path the loader opens for name in the folder dir, joined as it joins them and

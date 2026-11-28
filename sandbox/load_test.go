@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -28,29 +29,38 @@ const (
 )
 
 // fake is the files of a system that is not there: links, each link, a file's or a folder's, and
-// its target, objects, the ELF file at each real path, and broken, the files that are no ELF file
-// and why.
+// its target, objects, the ELF file at each real path, broken, the files that are no ELF file
+// and why, folders, the folders that hold nothing, and heads, the bytes of each file whose head
+// is read. A path that holds a file, a link or a folder is a folder too.
 type fake struct {
 	links   map[string]string
 	objects map[string]object
 	broken  map[string]string
+	folders map[string]bool
+	heads   map[string]string
 }
 
 // resolve follows name as the kernel does: one name at a time from the root, a link's target put
 // in its place, and ".." taken in the folder reached, so a ".." after a link leaves its target. A
-// name of 4096 bytes or more is the kernel's ENAMETOOLONG, and a walk past 40 links its ELOOP.
+// name of 4096 bytes or more, or with a part of more than 255, is the kernel's ENAMETOOLONG, a walk
+// past 40 links its ELOOP, and anything after a file, a closing slash among it, its ENOTDIR.
 func (f fake) resolve(name string) (string, error) {
 	if len(name) >= 4096 {
 		return "", syscall.ENAMETOOLONG
 	}
 	cur, rest := "/", strings.Split(name, "/")
 	for hops := 0; len(rest) > 0; {
+		if f.isFile(cur) {
+			return "", syscall.ENOTDIR
+		}
 		part := rest[0]
 		rest = rest[1:]
-		switch part {
-		case "", ".":
+		switch {
+		case len(part) > 255:
+			return "", syscall.ENAMETOOLONG
+		case part == "" || part == ".":
 			continue
-		case "..":
+		case part == "..":
 			cur = path.Dir(cur)
 			continue
 		}
@@ -69,14 +79,29 @@ func (f fake) resolve(name string) (string, error) {
 		}
 		rest = append(strings.Split(to, "/"), rest...)
 	}
-	_, object := f.objects[cur]
-	if _, broken := f.broken[cur]; !object && !broken {
+	if !f.isFile(cur) && !f.isFolder(cur) {
 		return "", fs.ErrNotExist
 	}
 	if len(cur) >= 4096 {
 		return "", fmt.Errorf("%w: lstat %s: file name too long", errUntold, cur)
 	}
 	return cur, nil
+}
+
+// isFile says whether the real path name is a file, an ELF file or another, and isFolder whether
+// it is a folder: the root, one that holds nothing, or one that holds a file, a link or a folder.
+func (f fake) isFile(name string) bool {
+	_, object := f.objects[name]
+	_, broken := f.broken[name]
+	return object || broken
+}
+func (f fake) isFolder(name string) bool {
+	holds := func(key string) bool { return strings.HasPrefix(key, strings.TrimSuffix(name, "/")+"/") }
+	return name == "/" || f.folders[name] ||
+		slices.ContainsFunc(slices.Collect(maps.Keys(f.objects)), holds) ||
+		slices.ContainsFunc(slices.Collect(maps.Keys(f.broken)), holds) ||
+		slices.ContainsFunc(slices.Collect(maps.Keys(f.links)), holds) ||
+		slices.ContainsFunc(slices.Collect(maps.Keys(f.folders)), holds)
 }
 
 func (f fake) object(name string) (object, error) {
@@ -88,6 +113,14 @@ func (f fake) object(name string) (object, error) {
 		return object{}, fs.ErrNotExist
 	}
 	return o, nil
+}
+
+func (f fake) head(name string) ([]byte, error) {
+	b, ok := f.heads[name]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return []byte(b), nil
 }
 
 // file is f with the ELF file o at the real path name, and link f with the path from resolving to.
@@ -106,13 +139,14 @@ func (o object) so(name string) object     { o.soname = name; return o }
 // by is o naming a library by the tag the search does not follow.
 func (o object) by(tag elf.DynTag) object { o.unfollowed = tag; return o }
 
-// dir is f with a folder at name, which resolve finds as it finds a file.
-func (f fake) dir(name string) fake { f.objects[name] = object{}; return f }
+// dir is f with a folder at name, and text f with the bytes b at the head of the file name.
+func (f fake) dir(name string) fake     { f.folders[name] = true; return f }
+func (f fake) text(name, b string) fake { f.heads[name] = b; return f }
 
 // system is a system's loader and libc: the loader named interp, a link to its real folder dir
 // unless it is there, and a libc in dir, found through the folder libs when that is another.
 func system(interp, dir, libs string) fake {
-	f := fake{links: map[string]string{}, objects: map[string]object{}, broken: map[string]string{}}
+	f := fake{links: map[string]string{}, objects: map[string]object{}, broken: map[string]string{}, folders: map[string]bool{}, heads: map[string]string{}}
 	loader := dir + interp[strings.LastIndex(interp, "/"):]
 	if loader != interp {
 		f.link(interp, loader)
@@ -367,20 +401,29 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // opens though its real folder cannot be told, ahead of a library of that name in the folder held.
 // So is musl's library found by a run path written with its closing slash, whose own run path by
 // $ORIGIN, the folder as musl writes it, makes a path of muslPath bytes, so musl passes it over for
-// the next folder's; a library looked for as a path the kernel answers with an error on which a
-// loader stops, a link loop or a path past its length limit, ahead of one in the folder held; a
-// program or a library that names one by DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY, on glibc
-// or musl; and, on glibc, a library looked for in a folder whose glibc-hwcaps subfolder is beneath
-// no built-in folder by its real path, in the folder held or through a link out of a built-in folder,
-// or is a link loop, or is reached by short links at a real path past the length limit, which cannot
-// be told.
+// the next folder's; on glibc, a library looked for, in a folder that is there, as a path the
+// kernel answers with an error on which glibc stops, a link loop, a path past its length limit or,
+// as glibc up to 2.38 stops, a link through a file, ahead of one in the folder held; on musl, a
+// folder in the list that is a link loop, and one with a name past the kernel's limit for one,
+// which musl passes over and the search does not; a program or a library that names one by
+// DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILIARY, on glibc or musl; on glibc, a library looked
+// for in a folder whose glibc-hwcaps subfolder is beneath no built-in folder by its real path, in
+// the folder held or through a link out of a built-in folder, or is a link loop, or is reached by
+// short links at a real path past the length limit, which cannot be told; and, on glibc 2.36, or
+// a glibc whose loader names no release or two, a folder whose legacy subfolder, tls, a platform's
+// or a hwcap's, is beneath no built-in folder, in the folder held or through a link out of a
+// built-in folder, or is a link loop.
 // A program whose libraries are all beneath the folder held or a built-in folder of its loader
 // runs: by $ORIGIN, by a run path into a second folder held, by a run path beneath a built-in
 // folder, musl's /usr/local/lib, and with a file of another architecture outside them, which glibc
 // passes over, so it is never loaded; musl's from that first folder when its path is a byte
 // shorter, and from the folder by $ORIGIN when the run path that found its library has no closing
-// slash; on glibc, by a built-in folder with its own glibc-hwcaps subfolder; and on musl, which reads
-// no glibc-hwcaps subfolder, by a folder held that has one.
+// slash; on glibc, by a built-in folder with its own glibc-hwcaps subfolder; on musl, which reads
+// no glibc-hwcaps subfolder, by a folder held that has one; on glibc, past a folder in the list it
+// cannot walk, a link loop, one past the length limit, one with a name past the limit for one, and
+// a file, to the next folder's library; on musl, past a library name that is a link through a file;
+// on glibc 2.37, which reads no legacy subfolder, by a folder held with a tls subfolder; on glibc
+// 2.36, by a built-in folder with its own; and on musl, by a folder held with one.
 //
 // What it costs when this fails: a program written into a read-write folder names a library in a
 // folder the caller never named, and RunHolding grants the program the read and the run of all of
@@ -422,7 +465,38 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		return glibc(obj(glibcAMD, "libb.so").rp("/opt/app/lib", "/elsewhere")).file("/opt/app/lib/libb.so", obj("", "libx.so").rp(first, "/opt/app/good")).
 			link("/opt/app/loop/libx.so", "/opt/app/loop/libx.so").file("/opt/app/good/libx.so", obj("")).file("/elsewhere/libx.so", obj(""))
 	}
-	long := "/opt/app" + strings.Repeat("/x/..", 820)
+	// long is a folder of 4,088 bytes, which the kernel walks, whose path with a slash and libx.so is
+	// 4,096, past its length limit; longer is one of 4,108, past it itself; wide is one with a name
+	// of 256 bytes, past the kernel's limit for a name.
+	long := "/opt/app" + strings.Repeat("/x/..", 816)
+	longer := "/opt/app" + strings.Repeat("/x/..", 820)
+	wide := "/opt/app/" + strings.Repeat("w", 256)
+	// glibc236 is the head of Debian 12's loader, which names its release; the loader of debian()
+	// is gnuAMD's.
+	glibc236 := "ld.so (Debian GLIBC 2.36-9+deb12u4) stable release version 2.36.\nCopyright (C) 2022"
+	loader := gnuAMD + "/ld-linux-x86-64.so.2"
+	// passes is a program on loader l with liba.so in /opt/app/good, found by the program's run path
+	// after first.
+	passes := func(l, first string) fake {
+		if l == muslAMD {
+			return alpine().file(tool, obj(muslAMD, "libx.so").run(first, "/opt/app/good")).file("/opt/app/good/libx.so", obj("")).dir("/opt/app/x")
+		}
+		return glibc(obj(glibcAMD, "libx.so").run(first, "/opt/app/good")).file("/opt/app/good/libx.so", obj("")).dir("/opt/app/x")
+	}
+	// throughFile is the program on loader l whose libx.so in /opt/app/lib is a link through the
+	// file /opt/app/file, ahead of the one in /opt/app/good.
+	throughFile := func(l string) fake {
+		return passes(l, "/opt/app/lib").link("/opt/app/lib/libx.so", "/opt/app/file/libx.so").file("/opt/app/file", obj(""))
+	}
+	// legacy is glibc's program finding liba.so in /opt/app/lib, beside a legacy subfolder sub,
+	// with a loader whose head is head, "" for none to be read.
+	legacy := func(sub, head string) fake {
+		f := glibc(obj(glibcAMD, "liba.so").run("/opt/app/lib")).dir("/opt/app/lib/"+sub).file(inHeld, obj(""))
+		if head != "" {
+			f.text(loader, head)
+		}
+		return f
+	}
 	// deep is 25 folders, each a slash and 100 bytes of the letter c: 2,525 bytes, so two of them
 	// make a path past the kernel's length limit.
 	deep := func(c string) string { return strings.Repeat("/"+strings.Repeat(c, 100), 25) }
@@ -522,11 +596,25 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		{
 			// glibc ends libb.so's list at the loop and goes on to the program's DT_RPATH, /elsewhere.
 			"glibc: a library looked for as a link loop, ahead of one in the folder held", stops("/opt/app/loop"),
-			`the library "libx.so", which "/opt/app/lib/libb.so" needs, is looked for as "/opt/app/loop/libx.so", which the kernel answers with an error on which a loader stops looking`,
+			`the library "libx.so", which "/opt/app/lib/libb.so" needs, is looked for as "/opt/app/loop/libx.so", in a folder that is there, which the kernel answers with an error on which a loader stops looking`,
 		},
 		{
-			"a library looked for as a path past the kernel's length limit, ahead of one in the folder held", stops(long),
-			`is looked for as "` + long + `/libx.so", which the kernel answers with an error on which a loader stops looking: file name too long`,
+			"glibc: a library looked for as a path past the kernel's length limit, in a folder within it, ahead of one in the folder held", stops(long).dir("/opt/app/x"),
+			`is looked for as "` + long + `/libx.so", in a folder that is there, which the kernel answers with an error on which a loader stops looking: file name too long`,
+		},
+		{
+			// glibc up to 2.38 ends the list on "not a folder" in a folder that is there; 2.39 goes on.
+			"glibc: a library name that is a link through a file, in a folder that is there", throughFile(glibcAMD),
+			`is looked for as "/opt/app/lib/libx.so", in a folder that is there, which the kernel answers with an error on which a loader stops looking: not a directory`,
+		},
+		{
+			"musl: a folder in the list that is a link loop, which stops musl", passes(muslAMD, "/opt/app/loop").link("/opt/app/loop", "/opt/app/loop"),
+			`is looked for as "/opt/app/loop/libx.so", which the kernel answers with an error on which a loader stops looking: too many levels of symbolic links`,
+		},
+		{
+			// musl passes over a name too long; the search refuses it all the same.
+			"musl: a folder with a name past the kernel's limit for one", passes(muslAMD, wide),
+			`is looked for as "` + wide + `/libx.so", which the kernel answers with an error on which a loader stops looking: file name too long`,
 		},
 		{"a program that names a library by DT_AUDIT", glibc(obj(glibcAMD, "libc.so.6").by(elf.DT_AUDIT)), "it names a library by DT_AUDIT, which the search does not follow"},
 		{"a program that names a library by DT_DEPAUDIT", glibc(obj(glibcAMD, "libc.so.6").by(elf.DT_DEPAUDIT)), "it names a library by DT_DEPAUDIT, which the search does not follow"},
@@ -557,9 +645,42 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 				link("/far"+deep("a")+"/bb", deep("b")[1:]).dir("/far"+deep("a")+deep("b")).file(inHeld, obj("")),
 			`where glibc first looks in "/opt/app/lib/glibc-hwcaps" by the machine's levels, which the search does not follow, and ` + errUntold.Error(),
 		},
+		{
+			"glibc 2.36: a folder held with a tls subfolder", legacy("tls", glibc236),
+			`the library "liba.so", which "` + tool + `" needs, is looked for in "/opt/app/lib", where glibc 2.36 first looks in its legacy subfolder "/opt/app/lib/tls" by the machine's hardware, which the search does not follow, and its real path "/opt/app/lib/tls" is beneath no built-in folder of the loader`,
+		},
+		{
+			"glibc of a release its loader does not tell: a folder held with a platform subfolder", legacy("x86_64", ""),
+			`where glibc up to 2.36 first looks in its legacy subfolder "/opt/app/lib/x86_64" by the machine's hardware, which the search does not follow, and its real path "/opt/app/lib/x86_64" is beneath no built-in folder of the loader; the release of the loader "` + loader + `" cannot be told from its file, so the subfolder alone refuses it`,
+		},
+		{
+			"glibc of a release its loader writes two ways: a folder held with a hwcap subfolder",
+			legacy("avx512_1", glibc236+" release version 2.39.\n"),
+			`where glibc up to 2.36 first looks in its legacy subfolder "/opt/app/lib/avx512_1"`,
+		},
+		{
+			"glibc 2.36: a built-in folder whose platform subfolder is a link out of it",
+			glibc(obj(glibcAMD, "libc.so.6")).link("/lib/x86_64-linux-gnu/haswell", "/opt/app/hw").dir("/opt/app/hw").text(loader, glibc236),
+			`where glibc 2.36 first looks in its legacy subfolder "/lib/x86_64-linux-gnu/haswell" by the machine's hardware, which the search does not follow, and its real path "/opt/app/hw" is beneath no built-in folder of the loader`,
+		},
+		{
+			"glibc 2.36 on arm64: a folder held with a hwcap subfolder",
+			debianARM().file(tool, obj(glibcARM, "liba.so").run("/opt/app/lib")).dir("/opt/app/lib/atomics").file(inHeld, obj("")).
+				text("/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", glibc236),
+			`where glibc 2.36 first looks in its legacy subfolder "/opt/app/lib/atomics" by the machine's hardware`,
+		},
+		{
+			"glibc 2.36: a folder held whose legacy subfolder is a link loop",
+			legacy("x", glibc236).link("/opt/app/lib/xeon_phi", "/opt/app/lib/xeon_phi"),
+			`where glibc 2.36 first looks in its legacy subfolder "/opt/app/lib/xeon_phi" by the machine's hardware, which the search does not follow, and too many levels of symbolic links`,
+		},
 	}
 	for _, r := range refused {
-		got, err := loadFolders(r.files, "amd64", tool, held)
+		arch := "amd64"
+		if r.files.objects[tool].interp == glibcARM {
+			arch = "arm64"
+		}
+		got, err := loadFolders(r.files, arch, tool, held)
 		if got != nil || !errors.Is(err, ErrUsage) || errors.Is(err, ErrNoBlock) {
 			t.Errorf("%s: the folders %q, %v; want none, ErrUsage and never ErrNoBlock", r.claim, got, err)
 		}
@@ -606,13 +727,24 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			"musl: a folder held with a glibc-hwcaps subfolder, which musl does not read",
 			alpine().file(tool, obj(muslAMD, "liba.so").run("/opt/app/lib")).dir("/opt/app/lib/glibc-hwcaps").file(inHeld, obj("")), held, []string{"/lib", "/opt/app/lib"},
 		},
+		{"glibc: a folder in the list that is a link loop, which glibc passes over", passes(glibcAMD, "/opt/app/loop").link("/opt/app/loop", "/opt/app/loop"), held, []string{gnuAMD, "/opt/app/good"}},
+		{"glibc: a folder in the list past the kernel's length limit, which glibc passes over", passes(glibcAMD, longer), held, []string{gnuAMD, "/opt/app/good"}},
+		{"glibc: a folder with a name past the kernel's limit for one, which glibc passes over", passes(glibcAMD, wide), held, []string{gnuAMD, "/opt/app/good"}},
+		{"glibc: a folder in the list that is a file, which glibc passes over", passes(glibcAMD, "/opt/app/file/").file("/opt/app/file", obj("")), held, []string{gnuAMD, "/opt/app/good"}},
+		{"musl: a library name that is a link through a file, which musl passes over", throughFile(muslAMD), held, []string{"/lib", "/opt/app/good"}},
+		{"glibc 2.37: a folder held with a tls subfolder, which 2.37 no longer reads", legacy("tls", "ld.so (GNU libc) stable release version 2.37.\n"), held, []string{gnuAMD, "/opt/app/lib"}},
+		{"glibc 2.36: a built-in folder with its own tls subfolder", glibc(obj(glibcAMD, "libc.so.6")).dir(gnuAMD+"/tls").text(loader, glibc236), held, []string{gnuAMD}},
+		{
+			"musl: a folder held with a tls subfolder, which musl does not read",
+			alpine().file(tool, obj(muslAMD, "liba.so").run("/opt/app/lib")).dir("/opt/app/lib/tls").file(inHeld, obj("")), held, []string{"/lib", "/opt/app/lib"},
+		},
 	}
 	for _, r := range runs {
 		if got, err := loadFolders(r.files, "amd64", tool, r.held); err != nil || !slices.Equal(got, r.want) {
 			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
 		}
 	}
-	if len(refused) < 24 || len(runs) < 12 {
+	if len(refused) < 32 || len(runs) < 20 {
 		t.Fatalf("ran %d refused rows and %d that run", len(refused), len(runs))
 	}
 }
@@ -898,4 +1030,36 @@ func FuzzReadObject(f *testing.F) {
 			t.Errorf("read as %+v, %v: a loader's name past the bound or with a NUL, or a script taken", got, err)
 		}
 	})
+}
+
+// TestTheReleaseOfAGlibcLoaderIsReadFromItsVersionLine: the release is the major and minor of the
+// line a glibc loader's --version prints, a Debian package's, a development release's and one
+// among other bytes; and none for no line, one whose numbers are not followed by a dot, one past
+// four digits, one with no minor, and two lines that differ, so the legacy subfolders are refused
+// by themselves.
+//
+// What it costs when this fails: glibc 2.36's loader taken for 2.37 or later, and a library in a
+// folder held with a tls subfolder that leads out of it is granted where the loader would load it
+// from that subfolder.
+func TestTheReleaseOfAGlibcLoaderIsReadFromItsVersionLine(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name, head   string
+		major, minor int
+		told         bool
+	}{
+		{"Debian 12's", "\x7fELF\x00ld.so (Debian GLIBC 2.36-9+deb12u4) stable release version 2.36.\nCopyright", 2, 36, true},
+		{"a development release", "ld.so (GNU libc) development release version 2.36.9000.\n", 2, 36, true},
+		{"the same line twice", "release version 2.40.\n release version 2.40.\n", 2, 40, true},
+		{"none", "\x7fELF\x00\x00ld.so", 0, 0, false},
+		{"numbers with no dot after", " release version 2.36\n", 0, 0, false},
+		{"a number past four digits", " release version 2.00036.\n", 0, 0, false},
+		{"no minor", " release version 2..\n", 0, 0, false},
+		{"two that differ", " release version 2.36.\n release version 2.39.\n", 0, 0, false},
+	} {
+		major, minor, told := glibcRelease([]byte(row.head))
+		if major != row.major || minor != row.minor || told != row.told {
+			t.Errorf("%s: %d.%d, %v; want %d.%d, %v", row.name, major, minor, told, row.major, row.minor, row.told)
+		}
+	}
 }

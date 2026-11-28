@@ -122,11 +122,13 @@ func TestAProgramStartsBehindTheBlockByTheFoldersRunHoldingAddsAndByNoFewer(t *t
 // passes that folder over and opens the file in the next, outside the folder held, though the first
 // folder's text reaches a library of that name in it. As root, whom the kernel lets search a folder
 // of mode 0, the loader opens the library in the folder held through the first, and Check grants
-// it. A library looked for first as a path the kernel answers with an error on which a loader stops,
-// through a link loop past its 40 links, as a file that is a link to itself, or past its 4096 bytes,
-// is refused for that, ahead of the one in the next folder, but where the loader is musl's, which
-// never opens a path of muslPath bytes or more and takes the next folder's; and so is a program that
-// names a library by DT_AUDIT. A library found by
+// it. A library looked for first as a file that is a link to itself is refused for that, ahead of the
+// one in the next folder, and so, on glibc, is one that is a link through a file, in a folder that
+// is there, and on musl one in a folder that is a link loop past the kernel's 40 links. glibc passes
+// over that folder, a folder that is a file, and one past the kernel's 4096 bytes, which musl never
+// opens, as a path of muslPath bytes or more, and takes the next folder's library, which is refused
+// as outside the folders; musl passes over the link through a file and the folder that is a file
+// the same way. So is a program that names a library by DT_AUDIT. A library found by
 // a run path whose first folder the kernel walks by short links to a real path past its 4096 bytes
 // is refused, the loader opening it though its real folder cannot be told, and never passed over
 // for the library of that name in bin, held and the next folder.
@@ -187,14 +189,17 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 			return `the library "` + found + `", which "` + prog + `" needs, is the file "` + lib + `", and its folder "` + elsewhere + `" is beneath no folder held`
 		}
 	}
-	stopped := func(at string) func(string) string {
-		return func(prog string) string {
-			return `the library "libx.so", which "` + prog + `" needs, is looked for as "` + at + `/libx.so", which the kernel answers with an error on which a loader stops looking`
-		}
-	}
-	tooLong := stopped(long)
-	if names, _ := loadersOf(builtArch); host.interp == names.musl {
-		tooLong = beneathNone(lib)
+	// glibc ends the list in a folder that is there, and passes over a folder it cannot walk, the
+	// link loop among them, for the next folder's library; musl stops at both, and passes over a
+	// file where a folder is looked for. Each passes over the path too long: glibc as a folder it
+	// cannot walk, musl unopened, as a path of 512 bytes or more.
+	names, _ := loadersOf(builtArch)
+	musl := host.interp == names.musl
+	stopped := stoppedAt(musl)
+	tf := throughAFile(t, filepath.Join(dir, "bin"))
+	atLoop, throughFile := beneathNone(lib), stopped(tf)
+	if musl {
+		atLoop, throughFile = stopped(loop), beneathNone(lib)
 	}
 	self := filepath.Join(dir, "bin", "self")
 	if err := os.Mkdir(self, 0o700); err != nil {
@@ -215,9 +220,11 @@ func TestAProgramNamingALibraryOutsideTheFoldersIsRefusedBeforeAnythingIsSet(t *
 		{"by-full-path", beneathNone(through + "/libx.so"), []dynEntry{{elf.DT_NEEDED, through + "/libx.so"}}, false},
 		{"by-run-path", beneathNone(through + "/libx.so"), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, through}}, false},
 		{"past-a-folder-shut", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, shut + ":" + elsewhere}}, true},
-		{"at-a-link-loop", stopped(loop), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, loop + ":" + elsewhere}}, false},
+		{"at-a-link-loop", atLoop, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, loop + ":" + elsewhere}}, false},
 		{"at-a-file-linked-to-itself", stopped(self), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, self + ":" + elsewhere}}, false},
-		{"at-a-path-too-long", tooLong, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, long + ":" + elsewhere}}, false},
+		{"at-a-path-too-long", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, long + ":" + elsewhere}}, false},
+		{"at-a-link-through-a-file", throughFile, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, tf + ":" + elsewhere}}, false},
+		{"past-a-file-for-a-folder", beneathNone(lib), []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, filepath.Join(dir, "bin", "libx.so") + ":" + elsewhere}}, false},
 		{"by-an-audit-tag", func(string) string { return "it names a library by DT_AUDIT, which the search does not follow" }, []dynEntry{{elf.DT_AUDIT, lib}}, false},
 		{"through-short-links-too-long", untold, []dynEntry{{elf.DT_NEEDED, "libx.so"}, {elf.DT_RUNPATH, far + ":" + filepath.Join(dir, "bin")}}, false},
 	} {
@@ -304,4 +311,83 @@ func farLinked(t *testing.T, dir string) string {
 
 // systemChild is the exit of the test binary as a program only one system's rows run; this system's
 // rows run none.
+// stoppedAt is what the search says of libx.so looked for in the folder at, which the kernel answers
+// with an error on which the loader stops: glibc's names the folder as there, as glibc stops only in
+// a folder that is there.
+func stoppedAt(musl bool) func(at string) func(prog string) string {
+	there := ", in a folder that is there,"
+	if musl {
+		there = ","
+	}
+	return func(at string) func(string) string {
+		return func(prog string) string {
+			return `the library "libx.so", which "` + prog + `" needs, is looked for as "` + at + `/libx.so"` + there + ` which the kernel answers with an error on which a loader stops looking`
+		}
+	}
+}
+
+// throughAFile is bin/tf, a folder whose libx.so is a link through the file bin/libx.so, which the
+// kernel answers with ENOTDIR, as it answers bin/libx.so/, a file where a folder is looked for.
+func throughAFile(t *testing.T, bin string) string {
+	t.Helper()
+	tf := filepath.Join(bin, "tf")
+	if err := os.Mkdir(tf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(bin, "libx.so", "libx.so"), filepath.Join(tf, "libx.so")); err != nil {
+		t.Fatal(err)
+	}
+	return tf
+}
+
+// TestThisSystemsLoaderNamesTheReleaseItsLibcNames: under glibc, the loader of this system's true
+// names in its bytes the release its libc.so.6 names in the line that libc prints when run, from
+// glibc 2.33, whose loader prints its release with --version; before 2.33 it names that release or
+// none. musl's loader names no glibc release.
+//
+// What it costs when this fails: the legacy subfolders refused by themselves on every glibc, or a
+// release taken that is not the loader's.
+func TestThisSystemsLoaderNamesTheReleaseItsLibcNames(t *testing.T) {
+	t.Parallel()
+	trueFile, err := filepath.EvalSymlinks("/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := osFiles{}.object(trueFile)
+	if err != nil || host.interp == "" {
+		t.Fatalf("this system's true names no loader: %q, %v", host.interp, err)
+	}
+	loader, err := filepath.EvalSymlinks(host.interp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := osFiles{}.head(loader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	major, minor, told := glibcRelease(head)
+	names, _ := loadersOf(builtArch)
+	if host.interp == names.musl {
+		if told {
+			t.Errorf("musl's loader %q names glibc %d.%d", loader, major, minor)
+		}
+		return
+	}
+	var libc []byte
+	for _, dir := range []string{"/lib/" + names.multiarch, "/usr/lib/" + names.multiarch, "/lib64", "/usr/lib64", "/lib", "/usr/lib"} {
+		if libc, err = (osFiles{}).head(dir + "/libc.so.6"); err == nil {
+			break
+		}
+	}
+	wantMajor, wantMinor, wantTold := glibcRelease(libc)
+	switch {
+	case !wantTold:
+		t.Fatalf("this system's libc.so.6 names no release: %v", err)
+	case major == wantMajor && minor == wantMinor && told:
+	case !told && wantMajor == 2 && wantMinor < 33:
+	default:
+		t.Errorf("the loader %q names %d.%d, %v; want %d.%d, as libc.so.6 names it", loader, major, minor, told, wantMajor, wantMinor)
+	}
+}
+
 func systemChild([]string) (int, bool) { return 0, false }
