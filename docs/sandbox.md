@@ -64,10 +64,9 @@ looks for that the kernel answers with an error other than not found, permission
 folder is refused, as musl stops the load there, and so is a name past the kernel's limit, which
 musl passes over, failing closed. musl names a found library by the folder as written, a slash and
 the name, and the search does too, so `$ORIGIN` in that library, and musl's 512-byte limit, read
-the same name. A
-library found where a loader's search order differs from the search's in some other way is not
-promised refused up front. Behind the block such a library loads only from the folders above, and
-from anywhere else fails at load, with nothing granted for it.
+the same name. A library found where a loader's search order differs from the search's in some
+other way is not promised refused up front. Behind the block such a library loads only from the
+folders above, and from anywhere else fails at load, with nothing granted for it.
 
 The system sandbox holds every exec too, so the walk only says before the run what the kernel would
 refuse after it. On Linux Landlock holds the exec of the real file. On macOS the profile denies
