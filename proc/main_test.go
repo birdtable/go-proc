@@ -154,6 +154,9 @@ func leaked() []string {
 //   - detach-hold <binary>: stands in for a test binary: starts tree hold <its own pid> detached,
 //     with this helper's stdout as its output, writes "id " and its tree id and "leader " and the
 //     leader's pid, then holds while <binary> lives.
+//   - exit-code <n>: exits with code n, which may be above the largest int32 where the system's
+//     exit codes are 32 bits wide, as an NTSTATUS value is.
+//   - pid-hold: writes its own pid and a newline to stdout, then holds.
 //
 // A mode of one system is in that system's helpers.
 func helper(mode string, args []string) int {
@@ -220,7 +223,7 @@ func helper(mode string, args []string) int {
 	}
 	// Each further mode is a function that says whether mode and args are its own, so a mode added
 	// to this list costs helper no branch.
-	for _, run := range []func(string, []string) (int, bool){refusedNil, treeModes, extraMode, pwdMode, pathSplitMode, systemEnvMode, systemHelper} {
+	for _, run := range []func(string, []string) (int, bool){refusedNil, treeModes, extraMode, endModes, pwdMode, pathSplitMode, systemEnvMode, systemHelper} {
 		if code, ok := run(mode, args); ok {
 			return code
 		}
@@ -253,6 +256,24 @@ func pathSplitMode(mode string, args []string) (int, bool) {
 		b.WriteString(dir + "\x00")
 	}
 	return wrote(os.Stdout.WriteString(b.String())), true
+}
+
+// endModes runs the exit-code and pid-hold modes, and says whether mode and args are one of them.
+func endModes(mode string, args []string) (int, bool) {
+	switch {
+	case mode == "exit-code" && len(args) == 1:
+		code, err := strconv.ParseUint(args[0], 10, 32)
+		if err != nil {
+			return 2, true
+		}
+		return int(code), true
+	case mode == "pid-hold" && len(args) == 0:
+		if code := wrote(fmt.Fprintf(os.Stdout, "%d\n", os.Getpid())); code != 0 {
+			return code, true
+		}
+		return then("hold"), true
+	}
+	return 0, false
 }
 
 // extraMode runs the extra mode, and says whether mode and args are it.
