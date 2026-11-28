@@ -387,7 +387,7 @@ type EndKind string
 // The kinds of a Result.End, a closed list.
 const (
 	// EndNone is a run refused, or ended by go-proc (its Timeout, MaxOutput, ctx, a limit, or
-	// WhyUnkillable or WhyEscaped), whose error says which.
+	// WhyUnkillable or WhyEscaped), whose error says which, or a run whose wait for its program failed.
 	EndNone EndKind = ""
 	// EndExited is the program's exit, with Code. On Windows so is an end by TerminateProcess with a
 	// code below 0xC0000000: Windows keeps no mark of who chose a code, so no library tells them apart.
@@ -1103,10 +1103,10 @@ func (w *capped) bytes() []byte {
 	return w.buf.Bytes()
 }
 
-// endingOf is how the reaped leader ended, as this system's endOf reads its state, and EndNone for an
-// unkillable run's leader, whose state is not read, as exitCode says.
+// endingOf is how the reaped leader ended, as endOf reads its state, and EndNone with no state to read:
+// an unkillable run's leader, as exitCode says, or one whose wait failed, as on ECHILD.
 func endingOf(cmd *process, unkillable bool) (EndKind, os.Signal, uint32) {
-	if unkillable {
+	if unkillable || cmd.ProcessState == nil {
 		return EndNone, nil, 0
 	}
 	return endOf(cmd.ProcessState)

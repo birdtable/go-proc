@@ -20,8 +20,11 @@ import (
 //   - escape: starts a holding helper in a session of its own, out of this helper's group, with
 //     this helper's stdout and stderr; writes its pid and a newline to stdout, and exits 0.
 //
-// and ttyModes's, childrenModes's, answerModes's, and nsModes's on the systems that have them.
+// and ttyModes's, reapModes's, childrenModes's, answerModes's, and nsModes's on the systems that have them.
 func systemHelper(mode string, args []string) (int, bool) {
+	if code, ok := reapModes(mode, args); ok {
+		return code, true
+	}
 	if code, ok := answerModes(mode, args); ok {
 		return code, true
 	}
