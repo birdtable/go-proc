@@ -43,10 +43,14 @@ type fake struct {
 // resolve follows name as the kernel does: one name at a time from the root, a link's target put
 // in its place, and ".." taken in the folder reached, so a ".." after a link leaves its target. A
 // name of 4096 bytes or more, or with a part of more than 255, is the kernel's ENAMETOOLONG, a walk
-// past 40 links its ELOOP, and anything after a file, a closing slash among it, its ENOTDIR.
+// past 40 links its ELOOP, anything after a file, a closing slash among it, its ENOTDIR, and the
+// empty name its ENOENT.
 func (f fake) resolve(name string) (string, error) {
-	if len(name) >= 4096 {
+	switch {
+	case len(name) >= 4096:
 		return "", syscall.ENAMETOOLONG
+	case name == "":
+		return "", fs.ErrNotExist
 	}
 	cur, rest := "/", strings.Split(name, "/")
 	for hops := 0; len(rest) > 0; {
@@ -412,7 +416,10 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // short links at a real path past the length limit, which cannot be told; and, on glibc 2.36, or
 // a glibc whose loader names no release or two, a folder whose legacy subfolder, tls, a platform's
 // or a hwcap's, is beneath no built-in folder, in the folder held or through a link out of a
-// built-in folder, or is a link loop.
+// built-in folder, or is a link loop, and on arm64 one with an asimd subfolder, outside the default
+// mask, or a cpuid one. So is, on glibc 2.37 or one whose release cannot be told, a folder in the
+// list written in 4,094 or 4,095 bytes, and on 2.39 in 4,094, where the name is past the length
+// limit, and on 2.37 the root where the name is a link loop.
 // A program whose libraries are all beneath the folder held or a built-in folder of its loader
 // runs: by $ORIGIN, by a run path into a second folder held, by a run path beneath a built-in
 // folder, musl's /usr/local/lib, and with a file of another architecture outside them, which glibc
@@ -422,8 +429,10 @@ func TestAProgramWhoseLoadFoldersCannotBeToldIsRefused(t *testing.T) {
 // no glibc-hwcaps subfolder, by a folder held that has one; on glibc, past a folder in the list it
 // cannot walk, a link loop, one past the length limit, one with a name past the limit for one, and
 // a file, to the next folder's library; on musl, past a library name that is a link through a file;
-// on glibc 2.37, which reads no legacy subfolder, by a folder held with a tls subfolder; on glibc
-// 2.36, by a built-in folder with its own; and on musl, by a folder held with one.
+// on glibc 2.37, which reads no legacy subfolder, by a folder held with a tls subfolder, and on
+// arm64 with an asimd one; on glibc 2.36, by a built-in folder with its own, and on arm64 with its
+// own sve; on musl, by a folder held with one; and past a folder in the list written in 4,096
+// bytes on glibc 2.37, and in 4,095 or 4,096 on 2.39.
 //
 // What it costs when this fails: a program written into a read-write folder names a library in a
 // folder the caller never named, and RunHolding grants the program the read and the run of all of
@@ -489,9 +498,36 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		return passes(l, "/opt/app/lib").link("/opt/app/lib/libx.so", "/opt/app/file/libx.so").file("/opt/app/file", obj(""))
 	}
 	// legacy is glibc's program finding liba.so in /opt/app/lib, beside a legacy subfolder sub,
-	// with a loader whose head is head, "" for none to be read.
+	// with a loader whose head is head, "" for none to be read; legacyARM is the same on arm64.
 	legacy := func(sub, head string) fake {
 		f := glibc(obj(glibcAMD, "liba.so").run("/opt/app/lib")).dir("/opt/app/lib/"+sub).file(inHeld, obj(""))
+		if head != "" {
+			f.text(loader, head)
+		}
+		return f
+	}
+	legacyARM := func(sub, head string) fake {
+		f := debianARM().file(tool, obj(glibcARM, "liba.so").run("/opt/app/lib")).dir("/opt/app/lib/"+sub).file(inHeld, obj(""))
+		if head != "" {
+			f.text("/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", head)
+		}
+		return f
+	}
+	// glibc237 and glibc239 are the heads of loaders of those releases. atLimit is /opt/app written
+	// in n bytes with "/." padding, from /opt/app/x/.. for an odd n; atLimitOn is glibc's program
+	// on a loader whose head is head, finding libx.so by a run path whose first folder is atLimit(n),
+	// where the path with the name is past the kernel's length limit, then in /opt/app/good.
+	glibc237 := "ld.so (GNU libc) stable release version 2.37.\n"
+	glibc239 := "ld.so (GNU libc) stable release version 2.39.\n"
+	atLimit := func(n int) string {
+		base := "/opt/app"
+		if n%2 == 1 {
+			base = "/opt/app/x/.."
+		}
+		return base + strings.Repeat("/.", (n-len(base))/2)
+	}
+	atLimitOn := func(head string, n int) fake {
+		f := passes(glibcAMD, atLimit(n))
 		if head != "" {
 			f.text(loader, head)
 		}
@@ -670,6 +706,43 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 			`where glibc 2.36 first looks in its legacy subfolder "/opt/app/lib/atomics" by the machine's hardware`,
 		},
 		{
+			// glibc up to 2.37 stats the folder without its closing slash, 4,094 or 4,095 bytes, which
+			// the kernel walks, and ends the list on the name's "file name too long"; 2.38 and later
+			// stat it with the slash, so the folder of 4,094 bytes alone is there for them.
+			"glibc 2.37: a folder in the list written in 4,094 bytes, ahead of one in the folder held", atLimitOn(glibc237, 4094),
+			"in a folder that is there, which the kernel answers with an error on which a loader stops looking: file name too long",
+		},
+		{
+			"glibc 2.37: a folder in the list written in 4,095 bytes, ahead of one in the folder held", atLimitOn(glibc237, 4095),
+			"in a folder that is there, which the kernel answers with an error on which a loader stops looking: file name too long",
+		},
+		{
+			"glibc of a release its loader does not tell: a folder in the list written in 4,095 bytes", atLimitOn("", 4095),
+			"in a folder that is there, which the kernel answers with an error on which a loader stops looking: file name too long",
+		},
+		{
+			"glibc 2.39: a folder in the list written in 4,094 bytes, ahead of one in the folder held", atLimitOn(glibc239, 4094),
+			"in a folder that is there, which the kernel answers with an error on which a loader stops looking: file name too long",
+		},
+		{
+			// glibc 2.37 stats the root as the empty name and passes it over; the search asks it as
+			// itself, which fails closed.
+			"glibc 2.37: the root in the list, where the name is a link loop, ahead of one in the folder held",
+			passes(glibcAMD, "/").link("/libx.so", "/libx.so").text(loader, glibc237),
+			`is looked for as "/libx.so", in a folder that is there, which the kernel answers with an error on which a loader stops looking: too many levels of symbolic links`,
+		},
+		{
+			// asimd is no name of glibc's default mask on arm64: glibc 2.36 looks in it only once the
+			// caller's environment widens the mask, which the search judges whatever the mask.
+			"glibc 2.36 on arm64: a folder held with a subfolder named for a hwcap bit outside the default mask", legacyARM("asimd", glibc236),
+			`where glibc 2.36 first looks in its legacy subfolder "/opt/app/lib/asimd" by the machine's hardware, which the search does not follow, and its real path "/opt/app/lib/asimd" is beneath no built-in folder of the loader`,
+		},
+		{
+			// cpuid is the default mask's name on arm64 from 2.26, before atomics took its place.
+			"glibc of a release its loader does not tell, on arm64: a folder held with a cpuid subfolder", legacyARM("cpuid", ""),
+			`where glibc up to 2.36 first looks in its legacy subfolder "/opt/app/lib/cpuid" by the machine's hardware`,
+		},
+		{
 			"glibc 2.36: a folder held whose legacy subfolder is a link loop",
 			legacy("x", glibc236).link("/opt/app/lib/xeon_phi", "/opt/app/lib/xeon_phi"),
 			`where glibc 2.36 first looks in its legacy subfolder "/opt/app/lib/xeon_phi" by the machine's hardware, which the search does not follow, and too many levels of symbolic links`,
@@ -732,7 +805,16 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		{"glibc: a folder with a name past the kernel's limit for one, which glibc passes over", passes(glibcAMD, wide), held, []string{gnuAMD, "/opt/app/good"}},
 		{"glibc: a folder in the list that is a file, which glibc passes over", passes(glibcAMD, "/opt/app/file/").file("/opt/app/file", obj("")), held, []string{gnuAMD, "/opt/app/good"}},
 		{"musl: a library name that is a link through a file, which musl passes over", throughFile(muslAMD), held, []string{"/lib", "/opt/app/good"}},
-		{"glibc 2.37: a folder held with a tls subfolder, which 2.37 no longer reads", legacy("tls", "ld.so (GNU libc) stable release version 2.37.\n"), held, []string{gnuAMD, "/opt/app/lib"}},
+		{"glibc 2.37: a folder held with a tls subfolder, which 2.37 no longer reads", legacy("tls", glibc237), held, []string{gnuAMD, "/opt/app/lib"}},
+		{"glibc 2.37: a folder in the list written in 4,096 bytes, which glibc passes over", atLimitOn(glibc237, 4096), held, []string{gnuAMD, "/opt/app/good"}},
+		{"glibc 2.39: a folder in the list written in 4,095 bytes, which glibc passes over", atLimitOn(glibc239, 4095), held, []string{gnuAMD, "/opt/app/good"}},
+		{"glibc 2.39: a folder in the list written in 4,096 bytes, which glibc passes over", atLimitOn(glibc239, 4096), held, []string{gnuAMD, "/opt/app/good"}},
+		{"glibc 2.37 on arm64: a folder held with an asimd subfolder, which 2.37 no longer reads", legacyARM("asimd", glibc237), held, []string{"/usr/lib/aarch64-linux-gnu", "/opt/app/lib"}},
+		{
+			"glibc 2.36 on arm64: a built-in folder with its own sve subfolder",
+			debianARM().file(tool, obj(glibcARM, "libc.so.6")).dir("/usr/lib/aarch64-linux-gnu/sve").text("/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", glibc236),
+			held, []string{"/usr/lib/aarch64-linux-gnu"},
+		},
 		{"glibc 2.36: a built-in folder with its own tls subfolder", glibc(obj(glibcAMD, "libc.so.6")).dir(gnuAMD+"/tls").text(loader, glibc236), held, []string{gnuAMD}},
 		{
 			"musl: a folder held with a tls subfolder, which musl does not read",
@@ -740,7 +822,11 @@ func TestALibraryBeneathNoFolderHeldAndNoBuiltInFolderOfTheLoaderIsRefused(t *te
 		},
 	}
 	for _, r := range runs {
-		if got, err := loadFolders(r.files, "amd64", tool, r.held); err != nil || !slices.Equal(got, r.want) {
+		arch := "amd64"
+		if r.files.objects[tool].interp == glibcARM {
+			arch = "arm64"
+		}
+		if got, err := loadFolders(r.files, arch, tool, r.held); err != nil || !slices.Equal(got, r.want) {
 			t.Errorf("%s: the folders %q, %v, want %q", r.claim, got, err, r.want)
 		}
 	}

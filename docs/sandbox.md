@@ -51,15 +51,19 @@ library by an audit or filter tag (DT_AUDIT, DT_DEPAUDIT, DT_FILTER or DT_AUXILI
 too, which reads none of them; and on glibc, a folder it searches whose glibc-hwcaps subfolder has a
 real path beneath no built-in folder of the loader, and, while the loader is glibc 2.36 or older, a
 folder it searches whose legacy subfolder, tls/ or a platform or hwcap subfolder glibc up to 2.36
-looks in first, has a real path beneath none. The release is read from the line the loader's file
+looks in first, has a real path beneath none, for every hwcap name glibc knows for the machine, not
+only its default mask's. The release is read from the line the loader's file
 prints with --version; where that names none, as before glibc 2.33, the subfolder alone refuses
 the folder, and the error says so. On glibc, a folder in the list that it cannot walk, a link
 loop, a path past the kernel's length limit or a file, is passed over for the next, as glibc passes
 it over. In a folder that is there, a path the kernel answers with an error other than not found
 or permission denied, a link loop, a path past the kernel's length or a link through a file among
 them, is refused: glibc ends that folder list there, and on not a folder glibc up to 2.38 does too,
-where 2.39 goes on, so for 2.39 that refusal fails closed. The search passes over a folder whose
-written path is at the kernel's length limit, though, and does not refuse it. On musl a path it
+where 2.39 goes on, so for 2.39 that refusal fails closed. glibc 2.38 and later ask whether the
+folder is there with its closing slash, and up to 2.37 without, so a folder whose written path is
+4,095 bytes is there for 2.37 and passed over by 2.38; the search asks as the loader's release does,
+and as 2.37 does where the release cannot be told, which fails closed, as does the root, which
+glibc up to 2.37 passes over and the search asks as itself. On musl a path it
 looks for that the kernel answers with an error other than not found, permission denied or not a
 folder is refused, as musl stops the load there, and so is a name past the kernel's limit, which
 musl passes over, failing closed. musl names a found library by the folder as written, a slash and
@@ -113,9 +117,10 @@ ids the exec runs with, must say yes, as the owner's bits decide for the owner, 
     /etc/ld-musl-<arch>.path, LD_LIBRARY_PATH or a glibc-hwcaps subfolder finds is not found, and
     the program is refused with ErrUsage, whatever folder is named. One that LD_PRELOAD or LD_AUDIT
     names, or that a program opens by dlopen once it runs, is not looked for: its folder is the
-    caller's to name. Nor is a hwcap subfolder that glibc up to 2.36 looks in only once the caller
-    widens its hwcap mask, by LD_HWCAP_MASK or GLIBC_TUNABLES=glibc.cpu.hwcap_mask= in the
-    program's environment: the search judges those of the default mask alone. On macOS name the
+    caller's to name. A hwcap subfolder that glibc up to 2.36 looks in once the caller widens its
+    hwcap mask in the program's environment, by LD_HWCAP_MASK, or by GLIBC_TUNABLES with
+    glibc.tune.hwcap_mask= from 2.26 to 2.28 or glibc.cpu.hwcap_mask= from 2.29, is judged as one
+    of the default mask is: the search judges every hwcap name glibc knows. On macOS name the
     program by its real path, since a link on the way to it outside the folders (/var, /tmp and
     /etc are links) cannot be followed, and RunHolding refuses it with ErrUsage; a library outside
     dyld's shared cache, and the folder of each program it starts, /bin for a shell, are the

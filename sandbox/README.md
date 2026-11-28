@@ -84,17 +84,19 @@ Know these before you rely on it.
   standard stream among them, is used as before.
 - **Libraries found only by `LD_LIBRARY_PATH` or `/etc/ld.so.cache`** are not found, and the
   program is refused whatever folders are named. Those named by `LD_PRELOAD` or opened by `dlopen`
-  are not looked for: name their folders yourself. Nor is a hwcap subfolder that glibc up to 2.36
-  looks in only once `LD_HWCAP_MASK` or `GLIBC_TUNABLES=glibc.cpu.hwcap_mask=` in the program's
-  environment widens its mask: the search judges those of the default mask alone.
+  are not looked for: name their folders yourself. A hwcap subfolder that glibc up to 2.36 looks
+  in once the program's environment widens its mask, by `LD_HWCAP_MASK`, or by `GLIBC_TUNABLES`
+  with `glibc.tune.hwcap_mask=` from 2.26 to 2.28 or `glibc.cpu.hwcap_mask=` from 2.29, is
+  judged as one of the default mask is: the search judges every hwcap name glibc knows.
 - **The up-front refusal covers what the load search finds**, not every way a loader can reach a
   library. A program is refused with `ErrUsage` when it, or a library it loads, names a library by
   an audit or filter tag; under glibc when a folder the search looks in has a `glibc-hwcaps`
   subfolder beneath no built-in folder, or, up to glibc 2.36 or where the loader's release cannot
   be told, a `tls/`, platform or hwcap subfolder beneath none; and when the kernel answers a path
   looked for with an error such as a link loop, under glibc in a folder that is there. glibc passes
-  over a folder it cannot walk, and so does the search. The search passes over a folder whose
-  written path is at the kernel's length limit too. A library found where a loader's search
+  over a folder it cannot walk, and so does the search. A folder whose written path is 4,095 bytes,
+  at the kernel's length limit, is there for glibc up to 2.37 and passed over from 2.38, and the
+  search asks as the loader's release does, and as 2.37 does where the release cannot be told. A library found where a loader's search
   order differs from the search's some other way is not promised refused before the run. Behind
   the block such a library loads only from the folders the block grants, and from anywhere else
   fails at load.

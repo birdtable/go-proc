@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bytes"
+	"cmp"
 	"debug/elf"
 	"errors"
 	"fmt"
@@ -53,9 +54,10 @@ import (
 // subfolder, is beneath none; and a path the loader opens that the kernel answers with an error but
 // "no such file" or "permission denied". musl stops the whole load on any such error but "not a
 // folder" and a name too long, and the search refuses a name too long too. glibc passes over a folder
-// it cannot walk, by its stat of the folder, as the search does, and ends that file's list in a folder
-// that is there, on "not a folder" too up to 2.38, and the search refuses it. A link loop and a path
-// past the kernel's length limit are such errors.
+// it cannot walk, by its stat of the folder, with its closing slash from 2.38 and without up to 2.37,
+// as the search does, and ends that file's list in a folder that is there, on "not a folder" too up
+// to 2.38, and the search refuses it. A link loop and a path past the kernel's length limit are
+// such errors.
 //
 // The bounds of one search: maxLibraries files, maxLoadDepth files from the program to a library,
 // maxPathList folders in one DT_RPATH or DT_RUNPATH, maxInterp bytes of a loader's name,
@@ -309,7 +311,12 @@ func mapped(loads []*elf.Prog, addr, size uint64) ([]byte, error) {
 // loaderNames is, for one architecture, the loader a glibc program names and the one a musl
 // program names, the library folder of Debian's multiarch layout, glibc's $PLATFORM, and the
 // legacy subfolders glibc up to 2.36 looks in first, each the first part of one: tls, the platforms
-// the kernel and glibc's own CPU check name, and the hwcap names glibc counts.
+// the kernel and glibc's own CPU check name, and the hwcap names glibc counts. Those are every name
+// glibc up to 2.36 knows for the machine, not only its default mask's: the caller's environment for
+// the program widens the mask to any of them, by LD_HWCAP_MASK, or by GLIBC_TUNABLES with
+// glibc.tune.hwcap_mask from 2.26 to 2.28 and glibc.cpu.hwcap_mask from 2.29, and Check is given
+// no environment, so the names are judged whatever the mask. On amd64 the mask adds no name: glibc
+// sets no hwcap bit there but x86_64 and avx512_1.
 type loaderNames struct {
 	glibc, musl, multiarch, platform string
 	legacy                           []string
@@ -324,7 +331,9 @@ func loadersOf(arch string) (loaderNames, bool) {
 			[]string{"tls", "x86_64", "haswell", "xeon_phi", "avx512_1"}}, true
 	case "arm64":
 		return loaderNames{"/lib/ld-linux-aarch64.so.1", "/lib/ld-musl-aarch64.so.1", "lib/aarch64-linux-gnu", "aarch64",
-			[]string{"tls", "aarch64", "atomics"}}, true
+			[]string{"tls", "aarch64", "fp", "asimd", "evtstrm", "aes", "pmull", "sha1", "sha2", "crc32", "atomics", "fphp", "asimdhp",
+				"cpuid", "asimdrdm", "jscvt", "fcma", "lrcpc", "dcpop", "sha3", "sm3", "sm4", "asimddp", "sha512", "sve", "asimdfhm",
+				"dit", "uscat", "ilrcpc", "flagm", "ssbs", "sb", "paca", "pacg"}}, true
 	}
 	return loaderNames{}, false
 }
@@ -577,12 +586,33 @@ func (s *search) candidate(by *loaded, dir, name string) (found, resolved string
 	return found, resolved, s.hwcapsOf(by, dir, name)
 }
 
-// walks says whether glibc's stat of folder, a searched folder as glibc writes it with a closing
-// slash, finds a folder there: one whose real path cannot be told is there, since the kernel walks
-// it.
-func (s *search) walks(folder string) bool {
-	_, err := s.files.resolve(folder)
-	return err == nil || errors.Is(err, errUntold)
+// walks says whether glibc's stat of the folder a library is looked for in, slashed as glibc writes
+// it with its closing slash, finds a folder there: glibc 2.38 and later stat it with that slash,
+// and up to 2.37 without, where a file is no folder and a folder at the kernel's length limit is
+// one. Where the loader's release cannot be told it is asked without, which finds a folder wherever
+// the stat with the slash does, and so fails closed; so does the root, which glibc up to 2.37 stats
+// as the empty name and passes over, and is asked as itself. One whose real path cannot be told is
+// there, since the kernel walks it.
+func (s *search) walks(slashed string) bool {
+	there := func(err error) bool { return err == nil || errors.Is(err, errUntold) }
+	_, withSlash := s.files.resolve(slashed)
+	if r := s.glibc(); r.told && (r.major > 2 || r.major == 2 && r.minor >= 38) {
+		return there(withSlash)
+	}
+	_, bare := s.files.resolve(cmp.Or(strings.TrimSuffix(slashed, "/"), "/"))
+	return there(bare) && !errors.Is(withSlash, syscall.ENOTDIR)
+}
+
+// glibc is the release of the loader, read from its file once.
+func (s *search) glibc() release {
+	if s.release == nil {
+		head, err := s.files.head(s.loader)
+		s.release = &release{}
+		if err == nil {
+			s.release.major, s.release.minor, s.release.told = glibcRelease(head)
+		}
+	}
+	return *s.release
 }
 
 // passedOver says whether err, the kernel's answer for a path a loader opens, is one on which both
@@ -612,14 +642,7 @@ func (s *search) hwcapsOf(by *loaded, dir, name string) error {
 		if why == "" {
 			continue
 		}
-		if s.release == nil {
-			head, err := s.files.head(s.loader)
-			s.release = &release{}
-			if err == nil {
-				s.release.major, s.release.minor, s.release.told = glibcRelease(head)
-			}
-		}
-		r := s.release
+		r := s.glibc()
 		switch {
 		case r.told && (r.major > 2 || r.major == 2 && r.minor >= 37):
 			return nil
