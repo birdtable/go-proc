@@ -552,6 +552,8 @@ func (s *search) find(by *loaded, name string) (*loaded, error) {
 // for a path the kernel answers with an error on which a loader stops, and, past those, for a folder
 // whose glibc-hwcaps or legacy subfolder hwcapsOf refuses. glibc, on an error but "no such file" and
 // "permission denied", passes over a folder it cannot walk, and looks in none of its subfolders.
+// "Not a folder" is asked first, since on Windows, where the rows run too, syscall.ENOTDIR is
+// ERROR_PATH_NOT_FOUND, which matches fs.ErrNotExist.
 func (s *search) candidate(by *loaded, dir, name string) (found, resolved string, err error) {
 	found, ok := s.joined(dir, name)
 	if !ok {
@@ -562,7 +564,7 @@ func (s *search) candidate(by *loaded, dir, name string) (found, resolved string
 	case err == nil:
 	case errors.Is(err, errUntold):
 		return "", "", noLoadf(s.prog, "the library %q, which %q needs, is the file %q, and %v", name, by.name, found, err)
-	case !s.rules.musl && dir != "" && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.EACCES):
+	case !s.rules.musl && dir != "" && (errors.Is(err, syscall.ENOTDIR) || !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.EACCES)):
 		if !s.walks(found[:len(found)-len(name)]) {
 			return "", "", nil
 		}

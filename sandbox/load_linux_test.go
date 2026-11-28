@@ -374,15 +374,19 @@ func TestThisSystemsLoaderNamesTheReleaseItsLibcNames(t *testing.T) {
 		return
 	}
 	var libc []byte
-	for _, dir := range []string{"/lib/" + names.multiarch, "/usr/lib/" + names.multiarch, "/lib64", "/usr/lib64", "/lib", "/usr/lib"} {
-		if libc, err = (osFiles{}).head(dir + "/libc.so.6"); err == nil {
+	var tried []error
+	for _, dir := range []string{"/" + names.multiarch, "/usr/" + names.multiarch, "/lib64", "/usr/lib64", "/lib", "/usr/lib"} {
+		b, err := osFiles{}.head(dir + "/libc.so.6")
+		if err == nil {
+			libc = b
 			break
 		}
+		tried = append(tried, err)
 	}
 	wantMajor, wantMinor, wantTold := glibcRelease(libc)
 	switch {
 	case !wantTold:
-		t.Fatalf("this system's libc.so.6 names no release: %v", err)
+		t.Fatalf("this system's libc.so.6 names no release, read %d bytes, after %v", len(libc), tried)
 	case major == wantMajor && minor == wantMinor && told:
 	case !told && wantMajor == 2 && wantMinor < 33:
 	default:
