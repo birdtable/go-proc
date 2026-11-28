@@ -655,7 +655,7 @@ func (s *search) hwcapsOf(by *loaded, dir, name string) error {
 // unjudged is why the subfolder sub of a folder searched cannot be judged, "" for none: it is a
 // folder whose real path is beneath no built-in folder of the loader, or the kernel answers it with
 // an error on which a loader stops, or its real path cannot be told, nor so whether it is a folder.
-// A file of its name glibc passes over, as its stat finds no folder (`!S_ISDIR`).
+// A file of its name glibc passes over, as it finds no folder there.
 func (s *search) unjudged(sub string) string {
 	real, folder, err := s.files.resolve(sub)
 	switch {

@@ -1,0 +1,3 @@
+kind: Fixed
+body: 'sandbox: v0.20.0''s Security entry says glibc stats each subfolder named `glibc-hwcaps`, `tls` or for a platform or hwcap bit and passes over one that is no folder. glibc never stats `glibc-hwcaps`: its open of a library beneath it, and its stat of the level folder beneath it, both fail with ENOTDIR. Exactly, glibc passes over such a file, as it finds no folder there. What the search does is as v0.20.0 gave it.'
+time: 2026-11-28T10:01:00.000000+00:00

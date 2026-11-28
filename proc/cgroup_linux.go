@@ -382,17 +382,17 @@ type runCgroup struct {
 	pause func()
 	// contained is whether the program starts in namespaces of its own and the run kills the tree on
 	// its oom or a loss of its limit: watch is the shared inotify, wds t's two watches there, and
-	// watchErr what ended the check, and oomKilled whether the check wrote cgroup.kill on an oom,
-	// both under watchesMu. shim is the pipe its shim reports on, the memfd that holds the program's
-	// environment and the end of the go-ahead's pipe the shim reads, and goAhead the end the caller
-	// writes shimGo to, open from made to started; exe is the binary the shim runs as, limit
-	// the file it writes 0 to, tree where it mounts proc, cgroups the file of mounts it reads there,
-	// mark its argv[0].
+	// watchErr what ended the check, and killed whether the check wrote cgroup.kill, on an oom or a
+	// loss, which makes the tree's end go-proc's own, both under watchesMu. shim is the pipe its
+	// shim reports on, the memfd that holds the program's environment and the end of the go-ahead's
+	// pipe the shim reads, and goAhead the end the caller writes shimGo to, open from made to
+	// started; exe is the binary the shim runs as, limit the file it writes 0 to, tree where it
+	// mounts proc, cgroups the file of mounts it reads there, mark its argv[0].
 	contained                       bool
 	watch                           *watch
 	wds                             [2]int
 	watchErr                        error
-	oomKilled                       bool
+	killed                          bool
 	shim                            [4]*os.File
 	goAhead                         *os.File
 	exe, limit, tree, cgroups, mark string
@@ -599,7 +599,7 @@ func (w *watch) wake() {
 			if err == nil {
 				ended, why = t.check()
 			} else if !errors.Is(err, os.ErrClosed) {
-				why = errors.Join(fmt.Errorf("%w: watching the run's cgroup: %w", errLimitLost, err), t.kill())
+				why = errors.Join(fmt.Errorf("%w: watching the run's cgroup: %w", errLimitLost, err), t.watchKill())
 			}
 			if ended {
 				t.watchErr = why
@@ -619,18 +619,24 @@ func (w *watch) wake() {
 // check kills t's tree and ends once t loses its limit, counts an oom, or cannot be read; why is why.
 func (t *runCgroup) check() (ended bool, why error) {
 	if err := t.held(); err != nil {
-		return true, errors.Join(err, t.kill())
+		return true, errors.Join(err, t.watchKill())
 	}
 	oomed, err := t.oomed()
 	if err != nil {
-		return true, errors.Join(fmt.Errorf("%w: reading the run's cgroup's memory.events: %w", errLimitLost, err), t.kill())
+		return true, errors.Join(fmt.Errorf("%w: reading the run's cgroup's memory.events: %w", errLimitLost, err), t.watchKill())
 	}
 	if oomed {
-		err := t.kill()
-		t.oomKilled = err == nil
-		return true, err
+		return true, t.watchKill()
 	}
 	return false, nil
+}
+
+// watchKill is the check's kill of t's tree, under watchesMu: a cgroup.kill written marks the tree's
+// end as go-proc's own (killed), which no later read takes back.
+func (t *runCgroup) watchKill() error {
+	err := t.kill()
+	t.killed = t.killed || err == nil
+	return err
 }
 
 // kill kills every process in t and beneath it, by cgroup.kill, which no controller takes away.
@@ -1179,8 +1185,12 @@ func limitEnded(killed bool, local map[string]uint64) bool {
 // to memory.oom.group, so the kernel killed one process, and where it was the tree's pid 1 the tree
 // ended with it, before the watch read memory.events. A kill of a process of t's own by its own oom,
 // an oom and an oom_kill in its memory.events.local, is then the limit's, as the watch's would have
-// made it.
+// made it. The watch's own kill, killed, is the limit's with nothing read, so no read that fails
+// takes it back.
 func (t *runCgroup) limitPassed(killed bool) (bool, error) {
+	if killed {
+		return true, nil
+	}
 	local, err := t.events("memory.events.local")
 	killed = killed || (t.contained && local["oom"] > 0 && local["oom_kill"] > 0)
 	return err == nil && limitEnded(killed, local), err
@@ -1220,7 +1230,8 @@ func (t *runCgroup) end(readPeak bool) error {
 	}
 	if t.limited && !lost {
 		watchesMu.Lock()
-		killed := t.oomKilled
+		// Unlost, a kill of the watch's was on an oom: each kill on a loss ends its check errLimitLost.
+		killed := t.killed
 		watchesMu.Unlock()
 		var err error
 		t.passed, err = t.limitPassed(killed)

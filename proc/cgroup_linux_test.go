@@ -2060,3 +2060,61 @@ func TestAContainedRunWhoseTreeEndedBeforeItsCheckReadAnOomEndsLimitWhenTheOomKi
 		}
 	}
 }
+
+// TestAContainedRunItsCheckKilledOnAnOomEndsLimitThoughItsLastReadFails: a Contained run's check,
+// on a planted cgroup, kills the tree by cgroup.kill once memory.events counts an oom, and once
+// memory.max no longer reads the run's limit, and each kill marks the tree as go-proc's own
+// (killed). After the oom's kill, end reads that the limit ended the tree, and endings names
+// errLimit, by which Run reads End EndNone, though memory.events.local, planted as a folder,
+// cannot be read. A loss's kill ends the check errLimitLost, by which endingOf reads EndNone.
+//
+// What it costs when this fails: a tree go-proc's own check killed ends EndSignal with SIGKILL, as
+// if another process had killed it, and no `limit`, on a run where that last read fails.
+func TestAContainedRunItsCheckKilledOnAnOomEndsLimitThoughItsLastReadFails(t *testing.T) {
+	t.Parallel()
+	for _, r := range []struct {
+		what, max string
+		lost      bool
+	}{
+		{"an oom", "1048576\n", false},
+		{"a loss: memory.max changed", "max\n", true},
+	} {
+		dir := t.TempDir()
+		// The files check reads, and an empty cgroup.kill, which a write of 1 to succeeds on.
+		files := map[string]string{"cgroup.controllers": "cpu memory pids\n", "memory.max": r.max, "memory.swap.max": "0\n", "memory.oom.group": "1\n", "memory.events": "low 0\noom 1\noom_kill 1\n", "cgroup.kill": ""}
+		for name, b := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(b), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// A folder named memory.events.local: opening it works, and reading it fails.
+		if err := os.Mkdir(filepath.Join(dir, "memory.events.local"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		tree := &runCgroup{path: dir, max: "1048576\n", contained: true, limited: true, pause: func() {}}
+		watchesMu.Lock()
+		ended, why := tree.check()
+		killed := tree.killed
+		watchesMu.Unlock()
+		if !ended || errors.Is(why, errLimitLost) != r.lost || !killed {
+			t.Errorf("%s: check ended %t, killed %t, %v, want ended, killed, and errLimitLost %t", r.what, ended, killed, why, r.lost)
+		}
+		if b, err := os.ReadFile(filepath.Join(dir, "cgroup.kill")); err != nil || string(b) != "1" {
+			t.Errorf("%s: cgroup.kill reads %q, %v, want 1", r.what, b, err)
+		}
+		if r.lost {
+			continue
+		}
+		// Its removal fails, as the planted folder is no cgroup; its limit reads as held.
+		if err := tree.end(false); errors.Is(err, errLimitLost) {
+			t.Fatalf("%s: the planted cgroup's limit reads as lost: %v", r.what, err)
+		}
+		if !tree.passedLimit() {
+			t.Errorf("%s: the check's own kill, with memory.events.local unreadable: passedLimit false, want true", r.what)
+		}
+		out := &streams{stdout: &capped{cut: func() {}}, stderr: &capped{cut: func() {}}}
+		if why := endings(t.Context(), out, &group{tree: tree}, false); len(why) != 1 || !errors.Is(why[0], errLimit) {
+			t.Errorf("%s: the check's own kill, with memory.events.local unreadable: endings %v, want errLimit alone, which reads End EndNone", r.what, why)
+		}
+	}
+}
