@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"syscall"
 	"testing"
 	"time"
@@ -192,3 +193,22 @@ func sessionOf(pid int) string {
 
 // inherited is what a program is told of f, the first of its run's ExtraFiles: its descriptor, 3.
 func inherited(_ testing.TB, _ *os.File) string { return "3" }
+
+// reapModes runs the reap-ignored mode, and says whether mode and args are it:
+//
+//   - reap-ignored: ignores SIGCHLD, runs an exit-code 0 helper, and writes "end ", the run's End
+//     quoted, " code ", its Code, " err " and whether its error is set, and a newline.
+func reapModes(mode string, args []string) (int, bool) {
+	if mode != "reap-ignored" || len(args) != 0 {
+		return 0, false
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return wrote(0, err), true
+	}
+	signal.Ignore(syscall.SIGCHLD)
+	res, err := Run(context.Background(), Cmd{
+		Path: exe, Args: []string{helperMode + "exit-code", "0"}, Timeout: ttyBackstop, MaxOutput: 1 << 10, Drain: drainWait,
+	})
+	return wrote(fmt.Fprintf(os.Stdout, "end %q code %d err %t\n", res.End, res.Code, err != nil)), true
+}
