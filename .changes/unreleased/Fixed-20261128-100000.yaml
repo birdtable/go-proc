@@ -1,0 +1,3 @@
+kind: Fixed
+body: 'proc: on Linux, a Contained run whose tree go-proc''s own check killed when its cgroup counted an oom now ends `limit`, with `Result.End` `EndNone`, though the read of the cgroup''s `memory.events.local` that follows the wait fails, where v0.20.0 read `End` `EndSignal` with `Signal` SIGKILL, as if another process had killed it, and gave that read''s error. Each kill the check makes marks the tree as go-proc''s own, and no later read takes it back.'
+time: 2026-11-28T10:00:00.000000+00:00
